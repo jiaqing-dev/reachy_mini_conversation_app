@@ -23,6 +23,7 @@ from numpy.typing import NDArray
 from huggingface_hub import cached_assets_path
 
 from reachy_mini import ReachyMini
+from reachy_mini_conversation_app.streaming import audio_to_int16
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ DEFAULT_COOLDOWN_S = 2.0
 _FEATURE_FRAMES = 16
 _FEATURE_DIM = 96
 _MEL_WINDOW = 76
+_EMPTY_POLL_SLEEP_S = 0.005
+_SCORE_LOG_INTERVAL_S = 2.0
 _MODEL_CACHE_NAMESPACE = "reachy_mini_conversation_app"
 _MODEL_CACHE_SUBDIR = "wake-word"
 _MODEL_CACHE_REVISION = "reechy-v1"
@@ -202,6 +205,16 @@ class WakeWordDetector:
             self._feature_buffer = self._feature_buffer[-120:, :]
         return prepared
 
+    def _score_features(self, *, frames_back: int = 0) -> float:
+        if frames_back == 0:
+            window = self._feature_buffer[-_FEATURE_FRAMES:, :]
+        else:
+            window = self._feature_buffer[-_FEATURE_FRAMES - frames_back : -frames_back, :]
+        if window.shape[0] != _FEATURE_FRAMES:
+            return self.last_score
+        features = window[None, :, :].astype(np.float32)
+        return float(np.asarray(self._wake.run(None, {self._wake_input_name: features})[0]).reshape(-1)[0])
+
     def process(self, pcm: NDArray[np.int16], sample_rate: int) -> float:
         """Feed microphone PCM and return the latest wake score in [0, 1]."""
         if sample_rate != SAMPLE_RATE:
@@ -209,8 +222,10 @@ class WakeWordDetector:
         prepared = self._prepare_features(np.asarray(pcm, dtype=np.int16))
         if prepared < CHUNK_SAMPLES:
             return self.last_score
-        features = self._feature_buffer[-_FEATURE_FRAMES:, :][None, :, :].astype(np.float32)
-        score = float(np.asarray(self._wake.run(None, {self._wake_input_name: features})[0]).reshape(-1)[0])
+        # Match openWakeWord: when several 80 ms frames arrive together, take the max score.
+        n_frames = prepared // CHUNK_SAMPLES
+        scores = [self._score_features(frames_back=i) for i in range(n_frames)]
+        score = max(scores)
         self.last_score = score
         return score
 
@@ -226,6 +241,26 @@ class WakeWordDetector:
         return True
 
 
+def _microphone_frame_to_int16(frame: Any) -> NDArray[np.int16]:
+    """Convert an SDK mic frame (float32 mono/stereo) to mono int16 PCM.
+
+    ``ReachyMini.media.get_audio_sample`` returns float32 in roughly [-1, 1].
+    Casting that array with ``dtype=np.int16`` truncates nearly every sample to
+    0, so the wake model only ever sees silence. Match the conversation path:
+    first channel if stereo, then ``audio_to_int16``.
+    """
+    audio = np.asarray(frame)
+    if audio.size == 0:
+        return np.empty(0, dtype=np.int16)
+    if audio.ndim == 2:
+        # channels-last (N, C) is the SDK convention; fall back if transposed.
+        if audio.shape[1] > audio.shape[0] and audio.shape[0] <= 8:
+            audio = audio.T
+        audio = audio[:, 0]
+    audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+    return audio_to_int16(audio)
+
+
 def listen_for_wake_word(
     robot: ReachyMini,
     *,
@@ -239,12 +274,20 @@ def listen_for_wake_word(
     Returns True on detection, False when stopped without a match. When
     ``own_recording`` is True the helper starts and stops the robot mic around
     the listen loop so it can run before the conversation stream owns media.
+
+    Mic capture runs on a dedicated thread (same pattern as ``LocalStream``).
+    The GStreamer appsink uses ``drop=True``; running ONNX on the polling
+    thread stalls pulls long enough that speech frames are discarded and the
+    wake model only ever sees fragments (scores stuck near 0 while RMS still
+    spikes).
     """
     wake_detector = detector or WakeWordDetector()
     wake_detector.reset()
 
     if own_recording:
         robot.media.start_recording()
+    # Give the LOCAL/GStreamer record pipeline a moment before the first pull.
+    time.sleep(0.3)
     try:
         sample_rate = int(robot.media.get_input_audio_samplerate())
         logger.info(
@@ -252,23 +295,64 @@ def listen_for_wake_word(
             wake_detector.threshold,
             sample_rate,
         )
-        while stop_event is None or not stop_event.is_set():
-            frame: Any = robot.media.get_audio_sample()
-            if frame is None:
-                continue
-            pcm = np.asarray(frame, dtype=np.int16).reshape(-1)
-            if pcm.size == 0:
-                continue
-            try:
-                score = wake_detector.process(pcm, sample_rate)
-            except ValueError as e:
-                logger.error("Wake-word mic format error: %s", e)
-                return False
-            if on_score is not None:
-                on_score(score)
-            if wake_detector.detected(score):
-                logger.info("Wake word detected (score=%.3f); handing off to conversation.", score)
-                return True
+        frames: deque[NDArray[np.int16]] = deque()
+        frames_lock = threading.Lock()
+        stop_reading = threading.Event()
+
+        def read_microphone() -> None:
+            while not stop_reading.is_set() and (stop_event is None or not stop_event.is_set()):
+                frame: Any = robot.media.get_audio_sample()
+                if frame is None:
+                    time.sleep(_EMPTY_POLL_SLEEP_S)
+                    continue
+                pcm = _microphone_frame_to_int16(frame)
+                if pcm.size == 0:
+                    continue
+                with frames_lock:
+                    frames.append(pcm)
+
+        reader = threading.Thread(target=read_microphone, name="wake-word-mic", daemon=True)
+        reader.start()
+        last_score_log = 0.0
+        peak_score = 0.0
+        peak_rms = 0.0
+        try:
+            while stop_event is None or not stop_event.is_set():
+                with frames_lock:
+                    pending = list(frames)
+                    frames.clear()
+                if not pending:
+                    time.sleep(_EMPTY_POLL_SLEEP_S)
+                    continue
+                pcm = pending[0] if len(pending) == 1 else np.concatenate(pending)
+                frame_rms = float(np.sqrt(np.mean(np.square(pcm.astype(np.float32))))) / 32768.0
+                peak_rms = max(peak_rms, frame_rms)
+                try:
+                    score = wake_detector.process(pcm, sample_rate)
+                except ValueError as e:
+                    logger.error("Wake-word mic format error: %s", e)
+                    return False
+                peak_score = max(peak_score, score)
+                if on_score is not None:
+                    on_score(score)
+                now = time.monotonic()
+                if now - last_score_log >= _SCORE_LOG_INTERVAL_S:
+                    logger.info(
+                        "Wake-word listening: score=%.4f peak=%.4f mic_rms=%.4f threshold=%.2f",
+                        score,
+                        peak_score,
+                        peak_rms,
+                        wake_detector.threshold,
+                    )
+                    last_score_log = now
+                    peak_score = 0.0
+                    peak_rms = 0.0
+                if wake_detector.detected(score):
+                    logger.info("Wake word detected (score=%.3f); handing off to conversation.", score)
+                    return True
+        finally:
+            stop_reading.set()
+            reader.join(timeout=2.0)
         logger.info("Wake-word listen stopped without a detection.")
         return False
     finally:

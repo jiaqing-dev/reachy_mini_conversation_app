@@ -86,6 +86,24 @@ def test_process_rejects_non_16k_and_detected_respects_cooldown(
     assert detector.detected(0.2, now=15.0) is False
 
 
+def test_microphone_frame_to_int16_scales_float32_not_truncates() -> None:
+    """SDK float32 frames must scale to int16; bare dtype casts would become silence."""
+    mono = np.full(8, 0.5, dtype=np.float32)
+    pcm = wake_mod._microphone_frame_to_int16(mono)
+    assert pcm.dtype == np.int16
+    assert int(np.max(np.abs(pcm))) == 16383
+
+    # The pre-fix bug path: casting float32 speech to int16 truncates to 0.
+    broken = np.asarray(mono, dtype=np.int16)
+    assert int(np.max(np.abs(broken))) == 0
+
+    # Conversation path keeps the first channel of SDK stereo frames.
+    stereo = np.column_stack((mono, np.full(8, 0.1, dtype=np.float32)))
+    stereo_pcm = wake_mod._microphone_frame_to_int16(stereo)
+    assert stereo_pcm.shape == (8,)
+    assert int(np.max(np.abs(stereo_pcm))) == 16383
+
+
 def test_listen_for_wake_word_returns_on_detection_and_stop(
     monkeypatch: pytest.MonkeyPatch, model_cache: tuple[Path, MagicMock]
 ) -> None:
@@ -93,23 +111,27 @@ def test_listen_for_wake_word_returns_on_detection_and_stop(
     detector = WakeWordDetector(threshold=0.5, cooldown_s=0.0)
     robot = MagicMock()
     robot.media.get_input_audio_samplerate.return_value = 16000
-    robot.media.get_audio_sample.side_effect = [
-        np.zeros(320, dtype=np.int16),
-        np.zeros(320, dtype=np.int16),
-    ]
+    # SDK LOCAL/GStreamer mic frames are float32 in [-1, 1], not int16.
+    robot.media.get_audio_sample.side_effect = lambda: np.full(320, 0.05, dtype=np.float32)
 
-    scores = iter([0.1, 0.9])
+    seen_pcm: list[np.ndarray] = []
+    call_count = {"n": 0}
 
     def fake_process(pcm: np.ndarray, sample_rate: int) -> float:
-        return next(scores)
+        seen_pcm.append(pcm)
+        call_count["n"] += 1
+        return 0.1 if call_count["n"] < 2 else 0.9
 
     monkeypatch.setattr(detector, "process", fake_process)
+    monkeypatch.setattr(wake_mod, "_SCORE_LOG_INTERVAL_S", 10_000.0)
+    monkeypatch.setattr(wake_mod.time, "sleep", lambda _seconds: None)
     assert listen_for_wake_word(robot, detector=detector, own_recording=True) is True
     robot.media.start_recording.assert_called_once_with()
     robot.media.stop_recording.assert_called_once_with()
+    assert seen_pcm[0].dtype == np.int16
+    assert int(np.max(np.abs(seen_pcm[0]))) > 0
 
     stop_event = threading.Event()
     stop_event.set()
-    robot.media.get_audio_sample.side_effect = lambda: np.zeros(320, dtype=np.int16)
     assert listen_for_wake_word(robot, detector=detector, stop_event=stop_event, own_recording=False) is False
     assert robot.media.start_recording.call_count == 1

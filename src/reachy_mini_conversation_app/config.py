@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from dataclasses import dataclass
 from urllib.parse import urlsplit, parse_qsl, urlunsplit
+from collections.abc import Sequence
 from importlib.resources import files
 
 from dotenv import find_dotenv, load_dotenv
@@ -96,6 +97,7 @@ CAMERA_ENABLED_ENV = "REACHY_MINI_CAMERA_ENABLED"
 WAKE_WORD_ENABLED_ENV = "WAKE_WORD_ENABLED"
 WAKE_WORD_THRESHOLD_ENV = "WAKE_WORD_THRESHOLD"
 WAKE_WORD_COOLDOWN_ENV = "WAKE_WORD_COOLDOWN_SECONDS"
+WAKE_WORDS_ENV = "WAKE_WORDS"
 INSTANCE_PATH_ENV = "REACHY_MINI_INSTANCE_PATH"
 HF_LOCAL_CONNECTION_MODE = "local"
 HF_DEPLOYED_CONNECTION_MODE = "deployed"
@@ -158,6 +160,7 @@ APP_TIMEOUT_MINUTES_ENV = "REACHY_MINI_APP_TIMEOUT_MINUTES"
 DEFAULT_APP_TIMEOUT_MINUTES = 1440.0
 DEFAULT_WAKE_WORD_THRESHOLD = 0.5
 DEFAULT_WAKE_WORD_COOLDOWN_S = 2.0
+DEFAULT_WAKE_WORDS = ("reechy",)
 
 
 def resolve_app_timeout_minutes() -> float | None:
@@ -223,6 +226,31 @@ def resolve_wake_word_cooldown_s() -> float:
         )
         return DEFAULT_WAKE_WORD_COOLDOWN_S
     return cooldown
+
+
+def resolve_wake_words(cli_value: str | None = None) -> tuple[str, ...]:
+    """Resolve the active wake-word id list from CLI or ``WAKE_WORDS``."""
+    from reachy_mini_conversation_app.audio.wake_word import parse_wake_word_ids
+
+    raw_value = (cli_value or "").strip() or os.getenv(WAKE_WORDS_ENV, "").strip()
+    if not raw_value:
+        return DEFAULT_WAKE_WORDS
+    try:
+        return parse_wake_word_ids(raw_value)
+    except ValueError as e:
+        logger.warning("Ignoring invalid %s=%r (%s); using %s.", WAKE_WORDS_ENV, raw_value, e, DEFAULT_WAKE_WORDS)
+        return DEFAULT_WAKE_WORDS
+
+
+def resolve_wake_word_model_uris(word_ids: Sequence[str]) -> dict[str, str]:
+    """Map word ids to ``WAKE_WORD_MODEL_<ID>`` paths/URLs when set."""
+    uris: dict[str, str] = {}
+    for word_id in word_ids:
+        env_name = f"WAKE_WORD_MODEL_{word_id.upper().replace('-', '_')}"
+        raw_value = os.getenv(env_name, "").strip()
+        if raw_value:
+            uris[word_id] = raw_value
+    return uris
 
 
 def normalize_hf_connection_mode(value: str | None) -> str | None:

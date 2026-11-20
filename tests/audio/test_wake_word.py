@@ -11,28 +11,59 @@ import numpy as np
 import pytest
 
 import reachy_mini_conversation_app.audio.wake_word as wake_mod
-from reachy_mini_conversation_app.audio.wake_word import WakeWordDetector, listen_for_wake_word
+from reachy_mini_conversation_app.audio.wake_word import (
+    WakeWordDetector,
+    parse_wake_word_ids,
+    listen_for_wake_word,
+    normalize_wake_word_id,
+)
 
 
 @pytest.fixture
 def model_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, MagicMock]:
     """Isolate wake-word model downloads from the network."""
-    payloads = {filename: f"model-{filename}".encode() for filename in wake_mod._MODEL_FILES}
+    payloads = {
+        filename: f"model-{filename}".encode()
+        for filename, (_url, _checksum) in {
+            **wake_mod._FEATURE_MODEL_FILES,
+            wake_mod._BUILTIN_WAKE_WORDS["reechy"].filename: ("", ""),
+        }.items()
+        if filename
+    }
+    reechy = wake_mod._BUILTIN_WAKE_WORDS["reechy"]
+    assert reechy.filename is not None
+    payloads[reechy.filename] = b"model-reechy"
 
     def respond(request: httpx.Request) -> httpx.Response:
-        for filename, (url, _checksum) in wake_mod._MODEL_FILES.items():
+        for filename, (url, _checksum) in wake_mod._FEATURE_MODEL_FILES.items():
             if str(request.url) == url:
                 return httpx.Response(200, content=payloads[filename])
+        if reechy.url is not None and str(request.url) == reechy.url:
+            return httpx.Response(200, content=payloads[reechy.filename])
         raise AssertionError(f"Unexpected wake-word download URL: {request.url}")
 
     download = MagicMock(side_effect=respond)
     monkeypatch.setattr(wake_mod, "cached_assets_path", lambda *_args: tmp_path)
     monkeypatch.setattr(
         wake_mod,
-        "_MODEL_FILES",
+        "_FEATURE_MODEL_FILES",
         {
             filename: (url, hashlib.sha256(payloads[filename]).hexdigest())
-            for filename, (url, _checksum) in wake_mod._MODEL_FILES.items()
+            for filename, (url, _checksum) in wake_mod._FEATURE_MODEL_FILES.items()
+        },
+    )
+    monkeypatch.setattr(
+        wake_mod,
+        "_BUILTIN_WAKE_WORDS",
+        {
+            **wake_mod._BUILTIN_WAKE_WORDS,
+            "reechy": wake_mod.WakeWordSpec(
+                word_id="reechy",
+                display_name="reechy",
+                filename=reechy.filename,
+                url=reechy.url,
+                sha256=hashlib.sha256(payloads[reechy.filename]).hexdigest(),
+            ),
         },
     )
     monkeypatch.setattr(wake_mod.httpx, "Client", partial(httpx.Client, transport=httpx.MockTransport(download)))
@@ -57,18 +88,43 @@ def model_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, 
     return tmp_path, download
 
 
+def test_normalize_and_parse_wake_word_ids() -> None:
+    """Aliases map 小白 → xiaobai; lists stay unique and ordered."""
+    assert normalize_wake_word_id("小白") == "xiaobai"
+    assert normalize_wake_word_id("Xiao-Bai") == "xiaobai"
+    assert parse_wake_word_ids("reechy, 小白, reechy") == ("reechy", "xiaobai")
+
+
 def test_detector_downloads_once_then_reuses_cache(
     model_cache: tuple[Path, MagicMock],
 ) -> None:
-    """First construction downloads the three ONNX files; the next start is offline."""
+    """First construction downloads feature + reechy files; the next start is offline."""
     cache, download = model_cache
     WakeWordDetector(threshold=0.5)
     assert download.call_count == 3
-    assert {(cache / name).is_file() for name in wake_mod._MODEL_FILES} == {True}
+    assert (cache / "melspectrogram.onnx").is_file()
+    assert (cache / "embedding_model.onnx").is_file()
 
     download.reset_mock()
     WakeWordDetector(threshold=0.5)
     download.assert_not_called()
+
+
+def test_xiaobai_without_model_raises_clear_error(
+    model_cache: tuple[Path, MagicMock],
+) -> None:
+    """小白 is a known id but must not pretend to detect without a classifier ONNX."""
+    with pytest.raises(FileNotFoundError, match="WAKE_WORD_MODEL_XIAOBAI|no bundled"):
+        WakeWordDetector(words=("xiaobai",))
+
+
+def test_custom_model_path_loads_second_classifier(model_cache: tuple[Path, MagicMock], tmp_path: Path) -> None:
+    """A local ONNX path enables an extra wake word beside the bundled reechy model."""
+    custom = tmp_path / "xiaobai.onnx"
+    custom.write_bytes(b"custom-xiaobai")
+    detector = WakeWordDetector(words=("reechy", "xiaobai"), model_uris={"xiaobai": str(custom)})
+    assert detector.word_ids == ("reechy", "xiaobai")
+    assert detector.display_name("xiaobai") == "小白"
 
 
 def test_process_rejects_non_16k_and_detected_respects_cooldown(

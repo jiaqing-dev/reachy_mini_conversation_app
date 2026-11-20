@@ -20,7 +20,16 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
         "--wake-word",
         default=False,
         action="store_true",
-        help="Listen for the 'reechy' wake prompt before starting (or resuming) the conversation session.",
+        help="Listen for configured wake prompt(s) before starting (or resuming) the conversation session.",
+    )
+    parser.add_argument(
+        "--wake-words",
+        default=None,
+        metavar="LIST",
+        help=(
+            "Comma-separated wake-word ids to listen for (default: reechy). "
+            "Built-ins: reechy, xiaobai (小白 requires WAKE_WORD_MODEL_XIAOBAI). Implies --wake-word."
+        ),
     )
     parser.add_argument(
         "--robot-name",

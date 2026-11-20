@@ -110,6 +110,28 @@ def test_resolve_wake_word_threshold(monkeypatch: pytest.MonkeyPatch, raw_value:
     ],
 )
 def test_resolve_wake_word_cooldown_s(monkeypatch: pytest.MonkeyPatch, raw_value: str, expected: float) -> None:
-    """Cooldownoldown parsing rejects negatives and non-numeric values."""
+    """Cooldown parsing rejects negatives and non-numeric values."""
     monkeypatch.setenv(config.WAKE_WORD_COOLDOWN_ENV, raw_value)
     assert config.resolve_wake_word_cooldown_s() == expected
+
+
+@pytest.mark.parametrize(
+    "raw_value, expected",
+    [
+        ("", config.DEFAULT_WAKE_WORDS),
+        ("reechy,小白", ("reechy", "xiaobai")),
+        ("xiaobai", ("xiaobai",)),
+    ],
+)
+def test_resolve_wake_words(monkeypatch: pytest.MonkeyPatch, raw_value: str, expected: tuple[str, ...]) -> None:
+    """WAKE_WORDS accepts aliases and defaults to reechy."""
+    monkeypatch.delenv(config.WAKE_WORDS_ENV, raising=False)
+    if raw_value:
+        monkeypatch.setenv(config.WAKE_WORDS_ENV, raw_value)
+    assert config.resolve_wake_words() == expected
+
+
+def test_resolve_wake_word_model_uris(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per-word model overrides come from WAKE_WORD_MODEL_<ID>."""
+    monkeypatch.setenv("WAKE_WORD_MODEL_XIAOBAI", "/tmp/xiaobai.onnx")
+    assert config.resolve_wake_word_model_uris(("reechy", "xiaobai")) == {"xiaobai": "/tmp/xiaobai.onnx"}

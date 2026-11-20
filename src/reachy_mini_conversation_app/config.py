@@ -93,6 +93,9 @@ HF_REALTIME_WS_URL_ENV = "HF_REALTIME_WS_URL"
 REALTIME_TRANSCRIPTION_LANGUAGE_ENV = "REALTIME_TRANSCRIPTION_LANGUAGE"
 MEMORY_ENABLED_ENV = "REACHY_MINI_MEMORY_ENABLED"
 CAMERA_ENABLED_ENV = "REACHY_MINI_CAMERA_ENABLED"
+WAKE_WORD_ENABLED_ENV = "WAKE_WORD_ENABLED"
+WAKE_WORD_THRESHOLD_ENV = "WAKE_WORD_THRESHOLD"
+WAKE_WORD_COOLDOWN_ENV = "WAKE_WORD_COOLDOWN_SECONDS"
 INSTANCE_PATH_ENV = "REACHY_MINI_INSTANCE_PATH"
 HF_LOCAL_CONNECTION_MODE = "local"
 HF_DEPLOYED_CONNECTION_MODE = "deployed"
@@ -153,6 +156,8 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 APP_TIMEOUT_MINUTES_ENV = "REACHY_MINI_APP_TIMEOUT_MINUTES"
 DEFAULT_APP_TIMEOUT_MINUTES = 1440.0
+DEFAULT_WAKE_WORD_THRESHOLD = 0.5
+DEFAULT_WAKE_WORD_COOLDOWN_S = 2.0
 
 
 def resolve_app_timeout_minutes() -> float | None:
@@ -166,6 +171,58 @@ def resolve_app_timeout_minutes() -> float | None:
         logger.warning("Ignoring invalid %s=%r; using default.", APP_TIMEOUT_MINUTES_ENV, raw_value)
         return DEFAULT_APP_TIMEOUT_MINUTES
     return timeout_minutes if timeout_minutes > 0 else None
+
+
+def resolve_wake_word_threshold() -> float:
+    """Read the wake-word detection threshold from the environment."""
+    raw_value = os.getenv(WAKE_WORD_THRESHOLD_ENV, "").strip()
+    if not raw_value:
+        return DEFAULT_WAKE_WORD_THRESHOLD
+    try:
+        threshold = float(raw_value)
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid %s=%r; using default %.2f.",
+            WAKE_WORD_THRESHOLD_ENV,
+            raw_value,
+            DEFAULT_WAKE_WORD_THRESHOLD,
+        )
+        return DEFAULT_WAKE_WORD_THRESHOLD
+    if not 0.0 < threshold <= 1.0:
+        logger.warning(
+            "Ignoring out-of-range %s=%r; using default %.2f.",
+            WAKE_WORD_THRESHOLD_ENV,
+            raw_value,
+            DEFAULT_WAKE_WORD_THRESHOLD,
+        )
+        return DEFAULT_WAKE_WORD_THRESHOLD
+    return threshold
+
+
+def resolve_wake_word_cooldown_s() -> float:
+    """Read the wake-word detection cooldown (seconds) from the environment."""
+    raw_value = os.getenv(WAKE_WORD_COOLDOWN_ENV, "").strip()
+    if not raw_value:
+        return DEFAULT_WAKE_WORD_COOLDOWN_S
+    try:
+        cooldown = float(raw_value)
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid %s=%r; using default %.1f.",
+            WAKE_WORD_COOLDOWN_ENV,
+            raw_value,
+            DEFAULT_WAKE_WORD_COOLDOWN_S,
+        )
+        return DEFAULT_WAKE_WORD_COOLDOWN_S
+    if cooldown < 0.0:
+        logger.warning(
+            "Ignoring negative %s=%r; using default %.1f.",
+            WAKE_WORD_COOLDOWN_ENV,
+            raw_value,
+            DEFAULT_WAKE_WORD_COOLDOWN_S,
+        )
+        return DEFAULT_WAKE_WORD_COOLDOWN_S
+    return cooldown
 
 
 def normalize_hf_connection_mode(value: str | None) -> str | None:
@@ -351,6 +408,7 @@ class Config:
     PROFILE_LANGUAGES: dict[str, str] = {}
     MEMORY_ENABLED = _env_flag(MEMORY_ENABLED_ENV, default=True)
     CAMERA_ENABLED = _env_flag(CAMERA_ENABLED_ENV, default=True)
+    WAKE_WORD_ENABLED = _env_flag(WAKE_WORD_ENABLED_ENV, default=False)
     LOCAL_VAD_ENABLED = _env_flag("LOCAL_VAD_ENABLED", default=True)
     LOCAL_BARGE_IN_ENABLED = _env_flag("LOCAL_BARGE_IN_ENABLED", default=True)
     HF_TOKEN = os.getenv("HF_TOKEN")  # Optional, falls back to hf auth login if not set
@@ -469,6 +527,7 @@ def refresh_runtime_config_from_env() -> None:
     config.REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
     config.MEMORY_ENABLED = _env_flag(MEMORY_ENABLED_ENV, default=True)
     config.CAMERA_ENABLED = _env_flag(CAMERA_ENABLED_ENV, default=True)
+    config.WAKE_WORD_ENABLED = _env_flag(WAKE_WORD_ENABLED_ENV, default=False)
     config.LOCAL_VAD_ENABLED = _env_flag("LOCAL_VAD_ENABLED", default=True)
     config.LOCAL_BARGE_IN_ENABLED = _env_flag("LOCAL_BARGE_IN_ENABLED", default=True)
 

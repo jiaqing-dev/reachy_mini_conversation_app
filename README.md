@@ -109,6 +109,9 @@ Copy `.env.example` to `.env` when you want to point Hugging Face at your own lo
 | `HF_REALTIME_WS_URL` | Direct websocket endpoint for your own Hugging Face backend. Accepts either a base URL like `ws://127.0.0.1:8765/v1` or the full websocket URL `ws://127.0.0.1:8765/v1/realtime`. Used when `HF_REALTIME_CONNECTION_MODE=local`. |
 | `HF_TOKEN` | Optional token for Hugging Face access. Local endpoints receive only this explicitly configured token. |
 | `REACHY_MINI_APP_TIMEOUT_MINUTES` | Minutes of inactivity before Reachy goes to sleep and the app stops. Defaults to `1440` (one day); set to `0` to disable. |
+| `WAKE_WORD_ENABLED` | When `true`, the app listens on the robot mic for the spoken prompt **reechy** before connecting the Hugging Face realtime dialogue. After `go_to_sleep` (or the inactivity timeout), it returns to wake-word listening instead of exiting. Defaults to `false`. Same as CLI `--wake-word`. |
+| `WAKE_WORD_THRESHOLD` | Wake-word score threshold in `(0, 1]`. Lower is more sensitive. Defaults to `0.5`. |
+| `WAKE_WORD_COOLDOWN_SECONDS` | Minimum seconds between accepted wake detections. Defaults to `2.0`. |
 | `REACHY_MINI_INSTANCE_PATH` | Directory for this instance's data: long-term memory, user personalities and settings. Defaults to `conversation_app` beside the daemon's own config (`~/.config/reachy_mini` on Linux). Data written by an older version inside the installed package is copied over once. |
 | `REACHY_MINI_MEMORY_ENABLED` | Long-term memory. When `false`, remembered facts stay on disk but are not injected into the prompt, and the `remember` / `forget` tools decline. Defaults to `true`. |
 | `REACHY_MINI_CAMERA_ENABLED` | Camera tool. `--no-camera` forces it off regardless. Defaults to `true`. |
@@ -185,6 +188,7 @@ The app runs in console mode. Add `--ui` to serve the web interface at http://12
 |--------|---------|-------------|
 | `--no-camera` | `False` | Run without camera capture. |
 | `--ui` | `False` | Serve the web UI at http://127.0.0.1:7860/, in addition to console mode. |
+| `--wake-word` | `False` | Listen for the **reechy** wake prompt before starting the Hugging Face dialogue; after sleep, listen again. |
 | `--robot-name` | `None` | Optional. Connect to a specific robot by name when running multiple daemons on the same subnet. See [Multiple robots on the same subnet](#advanced-features). |
 | `--debug` | `False` | Enable verbose logging for troubleshooting. |
 
@@ -196,7 +200,21 @@ reachy-mini-conversation-app --no-camera
 
 # Launch with the minimal web UI for personality/mic/settings control
 reachy-mini-conversation-app --ui
+
+# Wait for "reechy", then start the official conversation flow
+reachy-mini-conversation-app --wake-word
 ```
+
+### Wake word → dialogue handoff
+
+Optional. Off by default so existing launches still open the conversation immediately.
+
+1. With `--wake-word` or `WAKE_WORD_ENABLED=true`, the app connects to the robot and listens on the **Reachy Mini microphone** (SDK media pipeline at 16 kHz). It does **not** open a separate PyAudio device.
+2. On a match for the trained prompt **reechy** (model from [andyjmorgan/reachy-wake-word](https://github.com/andyjmorgan/reachy-wake-word), ONNX via the same openWakeWord feature stack), the app runs the normal wake-up movement if the head is in the sleep pose, then starts the existing Hugging Face realtime conversation loop unchanged.
+3. While a conversation session is active, wake-word listening is off; idle tools, barge-in, and the rest of the dialogue path behave as before.
+4. When the assistant calls `go_to_sleep` (or the inactivity timeout fires) in wake-word mode, the robot goes to sleep, the realtime session closes, and the app returns to step 1 instead of asking the daemon to stop the app.
+
+First use downloads three pinned ONNX files (melspectrogram, speech embedding, reechy classifier) into the Hugging Face assets cache (`HF_HOME/assets`, or `HF_ASSETS_CACHE`), similar to local Silero VAD. Later starts reuse the cache offline. The reechy weights are licensed **CC BY-NC-SA 4.0**; feature models follow openWakeWord (**Apache 2.0**). Needs a working robot mic through `reachy-mini-daemon` and network access on first download only — no extra cloud wake-word API.
 
 ## LLM tools exposed to the assistant
 

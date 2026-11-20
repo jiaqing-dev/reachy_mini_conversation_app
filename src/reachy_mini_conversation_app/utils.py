@@ -17,6 +17,12 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
     )
     parser.add_argument("--debug", default=False, action="store_true", help="Enable debug logging")
     parser.add_argument(
+        "--wake-word",
+        default=False,
+        action="store_true",
+        help="Listen for the 'reechy' wake prompt before starting (or resuming) the conversation session.",
+    )
+    parser.add_argument(
         "--robot-name",
         type=str,
         default=None,

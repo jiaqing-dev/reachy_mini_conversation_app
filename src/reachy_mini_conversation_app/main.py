@@ -66,6 +66,7 @@ def _start_inactivity_timeout_thread(
     logger: logging.Logger,
     app_stop_event: threading.Event | None,
     go_to_sleep: Callable[[], dict[str, Any]] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> threading.Thread:
     """Start a daemon that puts the app to sleep after inactivity."""
     timeout_seconds = timeout_minutes * 60.0
@@ -73,6 +74,8 @@ def _start_inactivity_timeout_thread(
     def poll_inactivity_timeout() -> None:
         logger.info("App inactivity timeout enabled: %.1f minutes.", timeout_minutes)
         while app_stop_event is None or not app_stop_event.is_set():
+            if cancel_event is not None and cancel_event.is_set():
+                return
             elapsed = stream_manager.seconds_since_activity()
             if elapsed >= timeout_seconds:
                 logger.info("No activity for %.1f minutes; going to sleep.", elapsed / 60.0)
@@ -127,6 +130,8 @@ def run(
         set_instance_path,
         get_hf_connection_selection,
         resolve_app_timeout_minutes,
+        resolve_wake_word_threshold,
+        resolve_wake_word_cooldown_s,
         refresh_runtime_config_from_env,
     )
     from reachy_mini_conversation_app.settings_store import load_settings_into_runtime
@@ -193,7 +198,11 @@ def run(
             logger.error("Please check your configuration and try again.")
             sys.exit(1)
 
-    app_lifecycle.wake_up_if_sleeping(robot, logger)
+    wake_word_enabled = bool(getattr(args, "wake_word", False) or config.WAKE_WORD_ENABLED)
+    if wake_word_enabled:
+        logger.info("Wake-word mode enabled: conversation starts after the 'reechy' prompt.")
+    else:
+        app_lifecycle.wake_up_if_sleeping(robot, logger)
 
     movement_manager = MovementManager(current_robot=robot)
 
@@ -255,9 +264,11 @@ def run(
 
     go_to_sleep_lock = threading.Lock()
     go_to_sleep_requested = threading.Event()
+    # When wake-word mode is on, sleep closes the dialogue session and returns to listening.
+    await_wake_after_sleep = threading.Event()
 
     def go_to_sleep_and_stop_app() -> dict[str, Any]:
-        """Put Reachy to sleep, then stop the current app."""
+        """Put Reachy to sleep, then stop the session (and app unless wake-word resume is on)."""
         if not go_to_sleep_lock.acquire(blocking=False):
             return {"status": "already_requested"}
 
@@ -284,6 +295,24 @@ def run(
                 sleep_error = f"{type(e).__name__}: {e}"
                 logger.error("Failed to move Reachy Mini to sleep pose: %s", e)
 
+            if wake_word_enabled:
+                await_wake_after_sleep.set()
+                local_stop_requested = True
+                try:
+                    stream_manager.close()
+                except Exception as e:
+                    local_stop_requested = False
+                    logger.error("Error while closing stream manager after go_to_sleep: %s", e)
+                result: dict[str, Any] = {
+                    "status": "sleeping" if sleep_error is None else "stop_requested",
+                    "awaiting_wake_word": True,
+                    "stop_current_app_requested": False,
+                    "local_stop_requested": local_stop_requested,
+                }
+                if sleep_error is not None:
+                    result["error"] = f"go_to_sleep movement failed: {sleep_error}"
+                return result
+
             stop_current_app_requested = False
             if app_stop_event is None or not app_stop_event.is_set():
                 stop_current_app_requested = app_lifecycle.request_stop_current_app(robot, logger)
@@ -297,7 +326,7 @@ def run(
                     local_stop_requested = False
                     logger.error("Error while closing stream manager after go_to_sleep: %s", e)
 
-            result: dict[str, Any] = {
+            result = {
                 "status": "sleeping" if sleep_error is None else "stop_requested",
                 "stop_current_app_requested": stop_current_app_requested,
                 "local_stop_requested": local_stop_requested,
@@ -330,14 +359,6 @@ def run(
 
     # Each async service → its own thread/loop
     movement_manager.start()
-    # Audio-reactive head motion is driven by the daemon's wobbler, which
-    # taps the media pipeline at push_audio_sample. The console stream pushes
-    # assistant audio through that pipeline directly.
-    robot.enable_wobbling()
-
-    timeout_minutes = resolve_app_timeout_minutes()
-    if timeout_minutes is not None:
-        _start_inactivity_timeout_thread(timeout_minutes, stream_manager, logger, app_stop_event, run_go_to_sleep_tool)
 
     def poll_stop_event() -> None:
         """Poll the stop event to allow graceful shutdown.
@@ -361,8 +382,71 @@ def run(
     if app_stop_event:
         threading.Thread(target=poll_stop_event, daemon=True).start()
 
+    wake_detector = None
+    if wake_word_enabled:
+        from reachy_mini_conversation_app.audio.wake_word import WakeWordDetector, listen_for_wake_word
+
+        try:
+            wake_detector = WakeWordDetector(
+                threshold=resolve_wake_word_threshold(),
+                cooldown_s=resolve_wake_word_cooldown_s(),
+            )
+        except Exception as e:
+            logger.error("Failed to initialize wake-word detector: %s", e)
+            sys.exit(1)
+
     try:
-        stream_manager.launch()
+        while True:
+            if wake_word_enabled:
+                assert wake_detector is not None
+                await_wake_after_sleep.clear()
+                go_to_sleep_requested.clear()
+                detected = listen_for_wake_word(
+                    robot,
+                    detector=wake_detector,
+                    stop_event=app_stop_event,
+                )
+                if not detected:
+                    break
+                app_lifecycle.wake_up_if_sleeping(robot, logger)
+                # Fresh realtime session for each wake → dialogue handoff.
+                stream_manager._install_handler(build_handler(startup_settings.voice))
+
+            # Audio-reactive head motion is driven by the daemon's wobbler, which
+            # taps the media pipeline at push_audio_sample. The console stream pushes
+            # assistant audio through that pipeline directly.
+            try:
+                robot.enable_wobbling()
+            except Exception as e:
+                logger.debug("Error enabling wobbling before conversation: %s", e)
+            # start() is idempotent while the worker is alive; stop() clears it after sleep.
+            movement_manager.start()
+
+            inactivity_cancel = threading.Event()
+            timeout_minutes = resolve_app_timeout_minutes()
+            if timeout_minutes is not None:
+                _start_inactivity_timeout_thread(
+                    timeout_minutes,
+                    stream_manager,
+                    logger,
+                    app_stop_event,
+                    run_go_to_sleep_tool,
+                    cancel_event=inactivity_cancel,
+                )
+
+            try:
+                stream_manager.launch()
+            finally:
+                inactivity_cancel.set()
+
+            if not wake_word_enabled:
+                break
+            if app_stop_event is not None and app_stop_event.is_set():
+                break
+            if not await_wake_after_sleep.is_set():
+                # Stream closed without a wake-word sleep (external stop / keyboard).
+                break
+            logger.info("Conversation ended for sleep; returning to wake-word listening.")
     except KeyboardInterrupt:
         logger.info("Keyboard interruption in main thread... closing server.")
     finally:

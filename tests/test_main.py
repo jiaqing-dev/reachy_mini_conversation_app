@@ -40,3 +40,25 @@ def test_inactivity_timeout_thread_closes_stream_manager_without_sleep_callback(
     thread.join(timeout=1.0)
     assert not thread.is_alive()
     stream_manager.close.assert_called_once_with()
+
+
+def test_inactivity_timeout_thread_exits_on_cancel_event() -> None:
+    """Cancelling the watchdog stops it without sleeping the robot."""
+    stream_manager = SimpleNamespace(seconds_since_activity=lambda: 0.0, close=MagicMock())
+    go_to_sleep = MagicMock()
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    thread = main_mod._start_inactivity_timeout_thread(
+        timeout_minutes=60.0,
+        stream_manager=stream_manager,
+        logger=MagicMock(),
+        app_stop_event=threading.Event(),
+        go_to_sleep=go_to_sleep,
+        cancel_event=cancel_event,
+    )
+
+    thread.join(timeout=1.0)
+    assert not thread.is_alive()
+    go_to_sleep.assert_not_called()
+    stream_manager.close.assert_not_called()

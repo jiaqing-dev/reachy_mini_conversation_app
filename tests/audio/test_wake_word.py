@@ -97,10 +97,11 @@ def test_microphone_frame_to_int16_scales_float32_not_truncates() -> None:
     broken = np.asarray(mono, dtype=np.int16)
     assert int(np.max(np.abs(broken))) == 0
 
-    stereo = np.column_stack((mono, mono * 0.5))
+    # Conversation path keeps the first channel of SDK stereo frames.
+    stereo = np.column_stack((mono, np.full(8, 0.1, dtype=np.float32)))
     stereo_pcm = wake_mod._microphone_frame_to_int16(stereo)
     assert stereo_pcm.shape == (8,)
-    assert int(np.max(np.abs(stereo_pcm))) > 0
+    assert int(np.max(np.abs(stereo_pcm))) == 16383
 
 
 def test_listen_for_wake_word_returns_on_detection_and_stop(
@@ -111,20 +112,19 @@ def test_listen_for_wake_word_returns_on_detection_and_stop(
     robot = MagicMock()
     robot.media.get_input_audio_samplerate.return_value = 16000
     # SDK LOCAL/GStreamer mic frames are float32 in [-1, 1], not int16.
-    robot.media.get_audio_sample.side_effect = [
-        np.full(320, 0.05, dtype=np.float32),
-        np.full(320, 0.05, dtype=np.float32),
-    ]
+    robot.media.get_audio_sample.side_effect = lambda: np.full(320, 0.05, dtype=np.float32)
 
     seen_pcm: list[np.ndarray] = []
-    scores = iter([0.1, 0.9])
+    call_count = {"n": 0}
 
     def fake_process(pcm: np.ndarray, sample_rate: int) -> float:
         seen_pcm.append(pcm)
-        return next(scores)
+        call_count["n"] += 1
+        return 0.1 if call_count["n"] < 2 else 0.9
 
     monkeypatch.setattr(detector, "process", fake_process)
     monkeypatch.setattr(wake_mod, "_SCORE_LOG_INTERVAL_S", 10_000.0)
+    monkeypatch.setattr(wake_mod.time, "sleep", lambda _seconds: None)
     assert listen_for_wake_word(robot, detector=detector, own_recording=True) is True
     robot.media.start_recording.assert_called_once_with()
     robot.media.stop_recording.assert_called_once_with()
@@ -133,6 +133,5 @@ def test_listen_for_wake_word_returns_on_detection_and_stop(
 
     stop_event = threading.Event()
     stop_event.set()
-    robot.media.get_audio_sample.side_effect = lambda: np.zeros(320, dtype=np.float32)
     assert listen_for_wake_word(robot, detector=detector, stop_event=stop_event, own_recording=False) is False
     assert robot.media.start_recording.call_count == 1

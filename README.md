@@ -109,7 +109,9 @@ Copy `.env.example` to `.env` when you want to point Hugging Face at your own lo
 | `HF_REALTIME_WS_URL` | Direct websocket endpoint for your own Hugging Face backend. Accepts either a base URL like `ws://127.0.0.1:8765/v1` or the full websocket URL `ws://127.0.0.1:8765/v1/realtime`. Used when `HF_REALTIME_CONNECTION_MODE=local`. |
 | `HF_TOKEN` | Optional token for Hugging Face access. Local endpoints receive only this explicitly configured token. |
 | `REACHY_MINI_APP_TIMEOUT_MINUTES` | Minutes of inactivity before Reachy goes to sleep and the app stops. Defaults to `1440` (one day); set to `0` to disable. |
-| `WAKE_WORD_ENABLED` | When `true`, the app listens on the robot mic for the spoken prompt **reechy** before connecting the Hugging Face realtime dialogue. After `go_to_sleep` (or the inactivity timeout), it returns to wake-word listening instead of exiting. Defaults to `false`. Same as CLI `--wake-word`. |
+| `WAKE_WORD_ENABLED` | When `true`, the app listens on the robot mic for the configured wake prompt(s) before connecting the Hugging Face realtime dialogue. After `go_to_sleep` (or the inactivity timeout), it returns to wake-word listening instead of exiting. Defaults to `false`. Same as CLI `--wake-word`. |
+| `WAKE_WORDS` | Comma-separated wake-word ids to score in parallel (default `reechy`). Built-ins: `reechy` (bundled ONNX), `xiaobai` / `小白` (needs `WAKE_WORD_MODEL_XIAOBAI`). Same as CLI `--wake-words`. |
+| `WAKE_WORD_MODEL_<ID>` | Path or `https://` URL to a custom openWakeWord classifier ONNX for id `<ID>` (uppercase). Required for `xiaobai` and any non-bundled word. Example: `WAKE_WORD_MODEL_XIAOBAI=/home/reachy/models/xiaobai.onnx`. |
 | `WAKE_WORD_THRESHOLD` | Wake-word score threshold in `(0, 1]`. Lower is more sensitive. Defaults to `0.5`. |
 | `WAKE_WORD_COOLDOWN_SECONDS` | Minimum seconds between accepted wake detections. Defaults to `2.0`. |
 | `REACHY_MINI_INSTANCE_PATH` | Directory for this instance's data: long-term memory, user personalities and settings. Defaults to `conversation_app` beside the daemon's own config (`~/.config/reachy_mini` on Linux). Data written by an older version inside the installed package is copied over once. |
@@ -188,7 +190,8 @@ The app runs in console mode. Add `--ui` to serve the web interface at http://12
 |--------|---------|-------------|
 | `--no-camera` | `False` | Run without camera capture. |
 | `--ui` | `False` | Serve the web UI at http://127.0.0.1:7860/, in addition to console mode. |
-| `--wake-word` | `False` | Listen for the **reechy** wake prompt before starting the Hugging Face dialogue; after sleep, listen again. |
+| `--wake-word` | `False` | Listen for configured wake prompt(s) before starting the Hugging Face dialogue; after sleep, listen again. |
+| `--wake-words` | `reechy` | Comma-separated wake-word ids (e.g. `reechy,xiaobai`). Implies `--wake-word`. |
 | `--robot-name` | `None` | Optional. Connect to a specific robot by name when running multiple daemons on the same subnet. See [Multiple robots on the same subnet](#advanced-features). |
 | `--debug` | `False` | Enable verbose logging for troubleshooting. |
 
@@ -203,18 +206,29 @@ reachy-mini-conversation-app --ui
 
 # Wait for "reechy", then start the official conversation flow
 reachy-mini-conversation-app --wake-word
+
+# Listen for reechy and 小白 (requires a trained 小白 ONNX — see below)
+WAKE_WORD_MODEL_XIAOBAI=/path/to/xiaobai.onnx reachy-mini-conversation-app --wake-words reechy,xiaobai
 ```
 
 ### Wake word → dialogue handoff
 
 Optional. Off by default so existing launches still open the conversation immediately.
 
-1. With `--wake-word` or `WAKE_WORD_ENABLED=true`, the app connects to the robot and listens on the **Reachy Mini microphone** (SDK media pipeline at 16 kHz). It does **not** open a separate PyAudio device.
-2. On a match for the trained prompt **reechy** (model from [andyjmorgan/reachy-wake-word](https://github.com/andyjmorgan/reachy-wake-word), ONNX via the same openWakeWord feature stack), the app runs the normal wake-up movement if the head is in the sleep pose, then starts the existing Hugging Face realtime conversation loop unchanged.
+1. With `--wake-word` / `--wake-words` or `WAKE_WORD_ENABLED=true`, the app connects to the robot and listens on the **Reachy Mini microphone** (SDK media pipeline at 16 kHz). It does **not** open a separate PyAudio device.
+2. On a match for any configured wake prompt, the app runs the normal wake-up movement if the head is in the sleep pose, then starts the existing Hugging Face realtime conversation loop unchanged. Multiple words share one feature pipeline and run **separate** classifier ONNX models in parallel (training showed a single multi-label head is weaker).
 3. While a conversation session is active, wake-word listening is off; idle tools, barge-in, and the rest of the dialogue path behave as before.
 4. When the assistant calls `go_to_sleep` (or the inactivity timeout fires) in wake-word mode, the robot goes to sleep, the realtime session closes, and the app returns to step 1 instead of asking the daemon to stop the app.
 
-First use downloads three pinned ONNX files (melspectrogram, speech embedding, reechy classifier) into the Hugging Face assets cache (`HF_HOME/assets`, or `HF_ASSETS_CACHE`), similar to local Silero VAD. Later starts reuse the cache offline. The reechy weights are licensed **CC BY-NC-SA 4.0**; feature models follow openWakeWord (**Apache 2.0**). Needs a working robot mic through `reachy-mini-daemon` and network access on first download only — no extra cloud wake-word API.
+**Bundled model:** **reechy** from [andyjmorgan/reachy-wake-word](https://github.com/andyjmorgan/reachy-wake-word) (CC BY-NC-SA 4.0). First use downloads melspectrogram + speech embedding (Apache 2.0) plus the reechy classifier into the Hugging Face assets cache (`HF_HOME/assets`, or `HF_ASSETS_CACHE`). Later starts reuse the cache offline.
+
+**小白 / custom words:** There is no public ready-made openWakeWord ONNX for **小白** in this repo, and this environment cannot train one without a GPU + synthetic speech pipeline. The app will **not** fake detection. To enable 小白:
+
+1. Train a classifier ONNX with [openWakeWord](https://github.com/dscripka/openWakeWord) (official Colab) or a Chinese-oriented fork such as [Chinese-wakeword-Colab-training](https://github.com/luuaiyan/Chinese-wakeword-Colab-training) / [openwakeword.com](https://openwakeword.com/). Use the same shared embedding stack; export ONNX only for the wake head.
+2. Copy the `.onnx` onto the robot and point `WAKE_WORD_MODEL_XIAOBAI` at it (or any `WAKE_WORD_MODEL_<ID>` for a custom id listed in `WAKE_WORDS`).
+3. Enable: `WAKE_WORD_ENABLED=true`, `WAKE_WORDS=reechy,xiaobai` (or `--wake-words reechy,小白`).
+
+Needs a working robot mic through `reachy-mini-daemon` and network access on first download of bundled files only — no extra cloud wake-word API.
 
 ## LLM tools exposed to the assistant
 

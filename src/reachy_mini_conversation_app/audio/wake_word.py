@@ -1,8 +1,10 @@
 """OpenWakeWord-style ONNX wake-word detection for the robot microphone.
 
-Uses the "reechy" model from andyjmorgan/reachy-wake-word (CC BY-NC-SA 4.0) plus
-openWakeWord's melspectrogram and speech-embedding ONNX preprocessors (Apache 2.0).
-Inference follows the same 80 ms / 1280-sample framing as that project's test utility.
+Shared melspectrogram + speech-embedding preprocessors (openWakeWord, Apache 2.0)
+feed one or more wake classifiers. The bundled **reechy** classifier comes from
+andyjmorgan/reachy-wake-word (CC BY-NC-SA 4.0). Additional words need their own
+ONNX classifiers (separate models score better than one multi-label head).
+Inference uses the same 80 ms / 1280-sample framing as that project's test utility.
 """
 
 from __future__ import annotations
@@ -14,7 +16,8 @@ from typing import Any
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from collections import deque
-from collections.abc import Callable
+from dataclasses import dataclass
+from collections.abc import Mapping, Callable, Sequence
 
 import httpx
 import numpy as np
@@ -32,6 +35,7 @@ SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1280  # 80 ms at 16 kHz
 DEFAULT_THRESHOLD = 0.5
 DEFAULT_COOLDOWN_S = 2.0
+DEFAULT_WAKE_WORD_IDS: tuple[str, ...] = ("reechy",)
 _FEATURE_FRAMES = 16
 _FEATURE_DIM = 96
 _MEL_WINDOW = 76
@@ -39,10 +43,9 @@ _EMPTY_POLL_SLEEP_S = 0.005
 _SCORE_LOG_INTERVAL_S = 2.0
 _MODEL_CACHE_NAMESPACE = "reachy_mini_conversation_app"
 _MODEL_CACHE_SUBDIR = "wake-word"
-_MODEL_CACHE_REVISION = "reechy-v1"
+_MODEL_CACHE_REVISION = "wake-words-v1"
 
-# Hosted next to the reference training repo; checksums pin the exact bytes.
-_MODEL_FILES: dict[str, tuple[str, str]] = {
+_FEATURE_MODEL_FILES: dict[str, tuple[str, str]] = {
     "melspectrogram.onnx": (
         "https://raw.githubusercontent.com/andyjmorgan/reachy-wake-word/"
         "main/openwakeword/resources/models/melspectrogram.onnx",
@@ -53,75 +56,213 @@ _MODEL_FILES: dict[str, tuple[str, str]] = {
         "main/openwakeword/resources/models/embedding_model.onnx",
         "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
     ),
-    "reechy-spk150-steps100k-acc98.15-rec97.50.onnx": (
-        "https://raw.githubusercontent.com/andyjmorgan/reachy-wake-word/"
-        "main/models/reechy-spk150-steps100k-acc98.15-rec97.50.onnx",
-        "bcd551a49315e443b11877ff52e11f30e42ecdf024b6c051dcaad80faee1e14f",
-    ),
 }
 
 
-def _download_model_files(model_directory: Path) -> dict[str, Path]:
-    """Download or reuse cached ONNX files, verifying SHA-256."""
-    paths: dict[str, Path] = {}
+@dataclass(frozen=True)
+class WakeWordSpec:
+    """One wake prompt: display label plus optional bundled classifier download."""
+
+    word_id: str
+    display_name: str
+    filename: str | None = None
+    url: str | None = None
+    sha256: str | None = None
+
+    @property
+    def is_bundled(self) -> bool:
+        """True when this word ships with a downloadable classifier ONNX."""
+        return bool(self.filename and self.url and self.sha256)
+
+
+# Separate classifiers per word (training showed multi-label heads dilute accuracy).
+_BUILTIN_WAKE_WORDS: dict[str, WakeWordSpec] = {
+    "reechy": WakeWordSpec(
+        word_id="reechy",
+        display_name="reechy",
+        filename="reechy-spk150-steps100k-acc98.15-rec97.50.onnx",
+        url=(
+            "https://raw.githubusercontent.com/andyjmorgan/reachy-wake-word/"
+            "main/models/reechy-spk150-steps100k-acc98.15-rec97.50.onnx"
+        ),
+        sha256="bcd551a49315e443b11877ff52e11f30e42ecdf024b6c051dcaad80faee1e14f",
+    ),
+    # No public ready-made ONNX for 小白; enable via WAKE_WORD_MODEL_XIAOBAI after training.
+    "xiaobai": WakeWordSpec(word_id="xiaobai", display_name="小白"),
+}
+
+_WAKE_WORD_ALIASES: dict[str, str] = {
+    "reechy": "reechy",
+    "小白": "xiaobai",
+    "xiaobai": "xiaobai",
+    "xiao_bai": "xiaobai",
+    "xiao-bai": "xiaobai",
+}
+
+
+def normalize_wake_word_id(name: str) -> str:
+    """Map a user-facing wake-word token to a stable ascii id."""
+    token = name.strip()
+    if not token:
+        raise ValueError("Wake-word id must be non-empty")
+    if token in _WAKE_WORD_ALIASES:
+        return _WAKE_WORD_ALIASES[token]
+    lowered = token.lower().replace(" ", "_")
+    if lowered in _WAKE_WORD_ALIASES:
+        return _WAKE_WORD_ALIASES[lowered]
+    compact = lowered.replace("-", "_")
+    if compact in _WAKE_WORD_ALIASES:
+        return _WAKE_WORD_ALIASES[compact]
+    if not all(ch.isalnum() or ch in {"_", "-"} for ch in lowered):
+        raise ValueError(
+            f"Unknown wake-word {name!r}. Use a built-in id ({', '.join(sorted(_BUILTIN_WAKE_WORDS))}) "
+            "or an ascii custom id with WAKE_WORD_MODEL_<ID>=/path/to/model.onnx"
+        )
+    return compact
+
+
+def parse_wake_word_ids(raw: str | Sequence[str] | None) -> tuple[str, ...]:
+    """Parse a comma-separated list or sequence into normalized unique word ids."""
+    if raw is None:
+        return DEFAULT_WAKE_WORD_IDS
+    if isinstance(raw, str):
+        parts = [part.strip() for part in raw.split(",")]
+    else:
+        parts = [str(part).strip() for part in raw]
+    ids: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        word_id = normalize_wake_word_id(part)
+        if word_id not in ids:
+            ids.append(word_id)
+    if not ids:
+        raise ValueError("Wake-word list is empty after parsing")
+    return tuple(ids)
+
+
+def wake_word_display_names(word_ids: Sequence[str]) -> str:
+    """Human-readable list for logs (for example: reechy, 小白)."""
+    labels: list[str] = []
+    for word_id in word_ids:
+        spec = _BUILTIN_WAKE_WORDS.get(word_id)
+        labels.append(spec.display_name if spec is not None else word_id)
+    return ", ".join(labels)
+
+
+def _wake_word_model_env_name(word_id: str) -> str:
+    return f"WAKE_WORD_MODEL_{word_id.upper().replace('-', '_')}"
+
+
+def _spec_for_word(word_id: str) -> WakeWordSpec:
+    return _BUILTIN_WAKE_WORDS.get(word_id) or WakeWordSpec(word_id=word_id, display_name=word_id)
+
+
+def _download_file(url: str, destination: Path, *, expected_sha256: str | None) -> Path:
+    """Download ``url`` into ``destination``, optionally verifying SHA-256."""
+    if destination.is_file():
+        if expected_sha256 is None or hashlib.sha256(destination.read_bytes()).hexdigest() == expected_sha256:
+            return destination
+        logger.warning("Cached wake-word file failed checksum verification: %s", destination)
+    logger.info("Downloading wake-word model file: %s", destination.name)
     with httpx.Client(follow_redirects=True, timeout=60.0) as client:
-        for filename, (url, checksum) in _MODEL_FILES.items():
-            cached_file = model_directory / filename
-            if cached_file.is_file() and hashlib.sha256(cached_file.read_bytes()).hexdigest() == checksum:
-                paths[filename] = cached_file
-                continue
-            if cached_file.is_file():
-                logger.warning("Cached wake-word file failed checksum verification: %s", cached_file)
-            logger.info("Downloading wake-word model file: %s", filename)
-            response = client.get(url)
-            response.raise_for_status()
-            if hashlib.sha256(response.content).hexdigest() != checksum:
-                raise ValueError(f"Downloaded wake-word file failed checksum verification: {filename}")
-            download = NamedTemporaryFile(dir=model_directory, delete=False)
-            download_path = Path(download.name)
-            try:
-                with download:
-                    download.write(response.content)
-                download_path.replace(cached_file)
-            finally:
-                download_path.unlink(missing_ok=True)
-            paths[filename] = cached_file
-    return paths
+        response = client.get(url)
+        response.raise_for_status()
+        content = response.content
+    if expected_sha256 is not None and hashlib.sha256(content).hexdigest() != expected_sha256:
+        raise ValueError(f"Downloaded wake-word file failed checksum verification: {destination.name}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    download = NamedTemporaryFile(dir=destination.parent, delete=False)
+    download_path = Path(download.name)
+    try:
+        with download:
+            download.write(content)
+        download_path.replace(destination)
+    finally:
+        download_path.unlink(missing_ok=True)
+    return destination
+
+
+def _resolve_classifier_path(
+    word_id: str,
+    *,
+    model_directory: Path,
+    model_uri: str | None,
+) -> Path:
+    """Resolve a classifier ONNX path from an override URI or a bundled download."""
+    spec = _spec_for_word(word_id)
+    if model_uri:
+        uri = model_uri.strip()
+        local = Path(uri).expanduser()
+        if local.is_file():
+            return local.resolve()
+        if uri.startswith(("http://", "https://")):
+            filename = spec.filename or f"{word_id}.onnx"
+            return _download_file(uri, model_directory / filename, expected_sha256=None)
+        raise FileNotFoundError(
+            f"Wake-word model for {spec.display_name!r} not found at {uri!r}. "
+            f"Set {_wake_word_model_env_name(word_id)} to an existing .onnx path or https URL."
+        )
+    if spec.is_bundled:
+        assert spec.filename is not None and spec.url is not None
+        return _download_file(spec.url, model_directory / spec.filename, expected_sha256=spec.sha256)
+    raise FileNotFoundError(
+        f"Wake word {spec.display_name!r} ({word_id}) has no bundled ONNX classifier. "
+        "Train a custom openWakeWord ONNX model (see README → Wake word), then set "
+        f"{_wake_word_model_env_name(word_id)}=/path/to/{word_id}.onnx. "
+        "Detection is not faked without a real model."
+    )
+
+
+def _ort_session(path: Path) -> ort.InferenceSession:
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = 1
+    options.inter_op_num_threads = 1
+    return ort.InferenceSession(str(path), sess_options=options, providers=["CPUExecutionProvider"])
 
 
 class WakeWordDetector:
-    """Score streaming 16 kHz mono PCM for the Reachy "reechy" wake prompt."""
+    """Score streaming 16 kHz mono PCM against one or more wake classifiers."""
 
-    def __init__(self, *, threshold: float = DEFAULT_THRESHOLD, cooldown_s: float = DEFAULT_COOLDOWN_S) -> None:
-        """Load preprocessor + wake models from the Hugging Face assets cache."""
+    def __init__(
+        self,
+        *,
+        threshold: float = DEFAULT_THRESHOLD,
+        cooldown_s: float = DEFAULT_COOLDOWN_S,
+        words: Sequence[str] | None = None,
+        model_uris: Mapping[str, str] | None = None,
+    ) -> None:
+        """Load shared feature models plus one classifier per requested wake word."""
         if not 0.0 < threshold <= 1.0:
             raise ValueError(f"Wake-word threshold must be in (0, 1], got {threshold}")
         if cooldown_s < 0.0:
             raise ValueError(f"Wake-word cooldown must be >= 0, got {cooldown_s}")
 
+        word_ids = parse_wake_word_ids(words)
         model_directory = cached_assets_path(_MODEL_CACHE_NAMESPACE, _MODEL_CACHE_SUBDIR, _MODEL_CACHE_REVISION)
-        paths = _download_model_files(model_directory)
+        for filename, (url, checksum) in _FEATURE_MODEL_FILES.items():
+            _download_file(url, model_directory / filename, expected_sha256=checksum)
 
-        options = ort.SessionOptions()
-        options.intra_op_num_threads = 1
-        options.inter_op_num_threads = 1
-        providers = ["CPUExecutionProvider"]
-        self._melspec = ort.InferenceSession(
-            str(paths["melspectrogram.onnx"]), sess_options=options, providers=providers
-        )
-        self._embedding = ort.InferenceSession(
-            str(paths["embedding_model.onnx"]), sess_options=options, providers=providers
-        )
-        self._wake = ort.InferenceSession(
-            str(paths["reechy-spk150-steps100k-acc98.15-rec97.50.onnx"]),
-            sess_options=options,
-            providers=providers,
-        )
-        self._wake_input_name = self._wake.get_inputs()[0].name
+        self._melspec = _ort_session(model_directory / "melspectrogram.onnx")
+        self._embedding = _ort_session(model_directory / "embedding_model.onnx")
+        self._wake_sessions: dict[str, ort.InferenceSession] = {}
+        self._wake_input_names: dict[str, str] = {}
+        self._display_names: dict[str, str] = {}
+        overrides = {normalize_wake_word_id(key): value for key, value in (model_uris or {}).items()}
+        for word_id in word_ids:
+            spec = _spec_for_word(word_id)
+            path = _resolve_classifier_path(word_id, model_directory=model_directory, model_uri=overrides.get(word_id))
+            session = _ort_session(path)
+            self._wake_sessions[word_id] = session
+            self._wake_input_names[word_id] = session.get_inputs()[0].name
+            self._display_names[word_id] = spec.display_name
 
+        self.word_ids = word_ids
         self.threshold = threshold
         self.cooldown_s = cooldown_s
+        self.last_scores: dict[str, float] = dict.fromkeys(word_ids, 0.0)
         self.last_score = 0.0
+        self.last_matched_word: str | None = None
         self._last_detection_monotonic = 0.0
         self._raw_buffer: deque[int] = deque(maxlen=SAMPLE_RATE * 10)
         self._raw_remainder = np.empty(0, dtype=np.int16)
@@ -131,7 +272,9 @@ class WakeWordDetector:
 
     def reset(self) -> None:
         """Clear streaming state between listen sessions."""
+        self.last_scores = dict.fromkeys(self.word_ids, 0.0)
         self.last_score = 0.0
+        self.last_matched_word = None
         self._last_detection_monotonic = 0.0
         self._raw_buffer.clear()
         self._raw_remainder = np.empty(0, dtype=np.int16)
@@ -205,29 +348,38 @@ class WakeWordDetector:
             self._feature_buffer = self._feature_buffer[-120:, :]
         return prepared
 
-    def _score_features(self, *, frames_back: int = 0) -> float:
+    def _score_word(self, word_id: str, *, frames_back: int = 0) -> float:
         if frames_back == 0:
             window = self._feature_buffer[-_FEATURE_FRAMES:, :]
         else:
             window = self._feature_buffer[-_FEATURE_FRAMES - frames_back : -frames_back, :]
         if window.shape[0] != _FEATURE_FRAMES:
-            return self.last_score
+            return self.last_scores[word_id]
         features = window[None, :, :].astype(np.float32)
-        return float(np.asarray(self._wake.run(None, {self._wake_input_name: features})[0]).reshape(-1)[0])
+        session = self._wake_sessions[word_id]
+        input_name = self._wake_input_names[word_id]
+        return float(np.asarray(session.run(None, {input_name: features})[0]).reshape(-1)[0])
 
     def process(self, pcm: NDArray[np.int16], sample_rate: int) -> float:
-        """Feed microphone PCM and return the latest wake score in [0, 1]."""
+        """Feed microphone PCM and return the highest wake score in [0, 1]."""
         if sample_rate != SAMPLE_RATE:
             raise ValueError(f"Wake-word detection requires {SAMPLE_RATE} Hz microphone audio")
         prepared = self._prepare_features(np.asarray(pcm, dtype=np.int16))
         if prepared < CHUNK_SAMPLES:
             return self.last_score
-        # Match openWakeWord: when several 80 ms frames arrive together, take the max score.
         n_frames = prepared // CHUNK_SAMPLES
-        scores = [self._score_features(frames_back=i) for i in range(n_frames)]
-        score = max(scores)
-        self.last_score = score
-        return score
+        best_score = 0.0
+        best_word: str | None = None
+        for word_id in self.word_ids:
+            scores = [self._score_word(word_id, frames_back=i) for i in range(n_frames)]
+            score = max(scores)
+            self.last_scores[word_id] = score
+            if score >= best_score:
+                best_score = score
+                best_word = word_id
+        self.last_score = best_score
+        self.last_matched_word = best_word
+        return best_score
 
     def detected(self, score: float | None = None, *, now: float | None = None) -> bool:
         """Return True once when score clears the threshold outside the cooldown window."""
@@ -239,6 +391,15 @@ class WakeWordDetector:
             return False
         self._last_detection_monotonic = moment
         return True
+
+    def display_name(self, word_id: str) -> str:
+        """Return the human-facing label for a configured wake-word id."""
+        return self._display_names.get(word_id, word_id)
+
+    def format_scores(self) -> str:
+        """Compact per-word score string for periodic logs."""
+        parts = [f"{self.display_name(word_id)}={self.last_scores[word_id]:.4f}" for word_id in self.word_ids]
+        return " ".join(parts)
 
 
 def _microphone_frame_to_int16(frame: Any) -> NDArray[np.int16]:
@@ -269,7 +430,7 @@ def listen_for_wake_word(
     on_score: Callable[[float], None] | None = None,
     own_recording: bool = True,
 ) -> bool:
-    """Block until the wake prompt is heard, or until ``stop_event`` is set.
+    """Block until a configured wake prompt is heard, or until ``stop_event`` is set.
 
     Returns True on detection, False when stopped without a match. When
     ``own_recording`` is True the helper starts and stops the robot mic around
@@ -291,7 +452,8 @@ def listen_for_wake_word(
     try:
         sample_rate = int(robot.media.get_input_audio_samplerate())
         logger.info(
-            "Listening for wake word 'reechy' (threshold=%.2f, mic=%s Hz).",
+            "Listening for wake word(s) %s (threshold=%.2f, mic=%s Hz).",
+            wake_word_display_names(wake_detector.word_ids),
             wake_detector.threshold,
             sample_rate,
         )
@@ -338,8 +500,8 @@ def listen_for_wake_word(
                 now = time.monotonic()
                 if now - last_score_log >= _SCORE_LOG_INTERVAL_S:
                     logger.info(
-                        "Wake-word listening: score=%.4f peak=%.4f mic_rms=%.4f threshold=%.2f",
-                        score,
+                        "Wake-word listening: %s peak=%.4f mic_rms=%.4f threshold=%.2f",
+                        wake_detector.format_scores(),
                         peak_score,
                         peak_rms,
                         wake_detector.threshold,
@@ -348,7 +510,12 @@ def listen_for_wake_word(
                     peak_score = 0.0
                     peak_rms = 0.0
                 if wake_detector.detected(score):
-                    logger.info("Wake word detected (score=%.3f); handing off to conversation.", score)
+                    matched = wake_detector.last_matched_word or wake_detector.word_ids[0]
+                    logger.info(
+                        "Wake word detected (%s, score=%.3f); handing off to conversation.",
+                        wake_detector.display_name(matched),
+                        score,
+                    )
                     return True
         finally:
             stop_reading.set()

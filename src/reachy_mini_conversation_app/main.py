@@ -128,10 +128,12 @@ def run(
         HF_LOCAL_CONNECTION_MODE,
         config,
         set_instance_path,
+        resolve_wake_words,
         get_hf_connection_selection,
         resolve_app_timeout_minutes,
         resolve_wake_word_threshold,
         resolve_wake_word_cooldown_s,
+        resolve_wake_word_model_uris,
         refresh_runtime_config_from_env,
     )
     from reachy_mini_conversation_app.settings_store import load_settings_into_runtime
@@ -198,9 +200,17 @@ def run(
             logger.error("Please check your configuration and try again.")
             sys.exit(1)
 
-    wake_word_enabled = bool(getattr(args, "wake_word", False) or config.WAKE_WORD_ENABLED)
+    wake_words = resolve_wake_words(getattr(args, "wake_words", None))
+    wake_word_enabled = bool(
+        getattr(args, "wake_word", False) or getattr(args, "wake_words", None) or config.WAKE_WORD_ENABLED
+    )
     if wake_word_enabled:
-        logger.info("Wake-word mode enabled: conversation starts after the 'reechy' prompt.")
+        from reachy_mini_conversation_app.audio.wake_word import wake_word_display_names
+
+        logger.info(
+            "Wake-word mode enabled: conversation starts after %s.",
+            wake_word_display_names(wake_words),
+        )
     else:
         app_lifecycle.wake_up_if_sleeping(robot, logger)
 
@@ -390,6 +400,8 @@ def run(
             wake_detector = WakeWordDetector(
                 threshold=resolve_wake_word_threshold(),
                 cooldown_s=resolve_wake_word_cooldown_s(),
+                words=wake_words,
+                model_uris=resolve_wake_word_model_uris(wake_words),
             )
         except Exception as e:
             logger.error("Failed to initialize wake-word detector: %s", e)

@@ -284,11 +284,12 @@ Offline local files only (no Spotify/YouTube). Playback uses the Reachy Mini SDK
 
 **Add your own tracks** (`.wav`, `.mp3`, `.ogg`, `.flac`, `.m4a`):
 
-1. Preferred: put files in the instance folder `sounds/lullabies/` (next to memory/settings), **or**
-2. Set `SOFT_MUSIC_DIR=/path/to/folder` in the environment / `.env`, **or**
-3. Use the bundled samples under `src/reachy_mini_conversation_app/sounds/lullabies/` (`gentle_sway`, `soft_chimes`).
+1. **Robot (USB):** put files under `/mnt/usb_storage/media` (USB mounted at `/mnt/usb_storage`). This is the default when `SOFT_MUSIC_DIR` is unset.
+2. Override with `SOFT_MUSIC_DIR=/path/to/folder` in the environment / `.env` (local/dev), **or** set it empty to skip that root.
+3. Or put files in the instance folder `sounds/lullabies/` (next to memory/settings).
+4. Bundled samples under `src/reachy_mini_conversation_app/sounds/lullabies/` (`gentle_sway`, `soft_chimes`) remain as a fallback when no user files are present.
 
-Bundled samples are **original synthetic audio (CC0)** — short soft tones for demos. Do **not** commit copyrighted music into the repo; keep personal lullabies in `SOFT_MUSIC_DIR` or the instance folder.
+Bundled samples are **original synthetic audio (CC0)** — short soft tones for demos. Do **not** commit copyrighted music into the repo; keep personal lullabies on the USB media folder, in `SOFT_MUSIC_DIR`, or in the instance folder.
 
 Default play volume is **80/100** (audible on the robot speaker; 25 was too quiet). Soft music also disables audio-reactive head wobbling so playback stays calm. `stop_soft_music` restores the previous speaker level when it can. Sleep also stops soft music. Stopping uses a dedicated sound stop (not `media.stop_playing()`), so conversation TTS keeps working.
 

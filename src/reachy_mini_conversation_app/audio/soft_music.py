@@ -22,6 +22,8 @@ from reachy_mini_conversation_app.daemon_api import DaemonApiError, daemon_reque
 logger = logging.getLogger(__name__)
 
 SOFT_MUSIC_DIR_ENV = "SOFT_MUSIC_DIR"
+# Robot deploy default: USB stick mounted at /mnt/usb_storage (override via SOFT_MUSIC_DIR).
+DEFAULT_SOFT_MUSIC_DIR = "/mnt/usb_storage/media"
 DEFAULT_SOFT_VOLUME = 80
 _AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 _SILENCE_NAME = "_silence_stop.wav"
@@ -35,9 +37,9 @@ def bundled_lullabies_dir() -> Path:
 
 
 def resolve_music_dirs(instance_path: str | Path | None = None) -> list[Path]:
-    """Return music search roots: env override, instance folder, then bundled samples."""
+    """Return music roots: SOFT_MUSIC_DIR (USB default), instance lullabies, then bundled samples."""
     dirs: list[Path] = []
-    env_dir = os.getenv(SOFT_MUSIC_DIR_ENV, "").strip()
+    env_dir = os.getenv(SOFT_MUSIC_DIR_ENV, DEFAULT_SOFT_MUSIC_DIR).strip()
     if env_dir:
         dirs.append(Path(env_dir).expanduser())
     if instance_path is not None:
@@ -85,7 +87,8 @@ def resolve_track(name: str | None, instance_path: str | Path | None = None) -> 
     if not tracks:
         raise FileNotFoundError(
             "No soft-music tracks found. Add .wav/.mp3 files under "
-            f"{SOFT_MUSIC_DIR_ENV}, <instance>/sounds/lullabies/, or the bundled samples directory."
+            f"{SOFT_MUSIC_DIR_ENV} (default {DEFAULT_SOFT_MUSIC_DIR}), "
+            "<instance>/sounds/lullabies/, or the bundled samples directory."
         )
     if name is None or not str(name).strip():
         return tracks[0]

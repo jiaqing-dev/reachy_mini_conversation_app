@@ -18,8 +18,30 @@ def test_bundled_catalog_lists_royalty_safe_samples() -> None:
     assert "_silence_stop" not in stems
 
 
-def test_resolve_track_by_stem_and_unknown(tmp_path: Path) -> None:
+def test_resolve_music_dirs_defaults_to_usb_media(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Unset SOFT_MUSIC_DIR uses the robot USB media root; override still wins."""
+    monkeypatch.delenv(soft_music.SOFT_MUSIC_DIR_ENV, raising=False)
+    dirs = soft_music.resolve_music_dirs(instance_path=tmp_path)
+    assert dirs[0] == Path(soft_music.DEFAULT_SOFT_MUSIC_DIR)
+    assert dirs[0] == Path("/mnt/usb_storage/media")
+    assert (tmp_path / "sounds" / "lullabies") in dirs
+    assert soft_music.bundled_lullabies_dir() in dirs
+
+    override = tmp_path / "custom_media"
+    override.mkdir()
+    monkeypatch.setenv(soft_music.SOFT_MUSIC_DIR_ENV, str(override))
+    overridden = soft_music.resolve_music_dirs(instance_path=tmp_path)
+    assert overridden[0] == override
+
+    monkeypatch.setenv(soft_music.SOFT_MUSIC_DIR_ENV, "")
+    skipped = soft_music.resolve_music_dirs(instance_path=tmp_path)
+    assert Path(soft_music.DEFAULT_SOFT_MUSIC_DIR) not in skipped
+    assert skipped[0] == tmp_path / "sounds" / "lullabies"
+
+
+def test_resolve_track_by_stem_and_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """User directories override bundled names; unknown stems raise clearly."""
+    monkeypatch.setenv(soft_music.SOFT_MUSIC_DIR_ENV, "")
     custom = tmp_path / "sounds" / "lullabies"
     custom.mkdir(parents=True)
     (custom / "moonbeam.wav").write_bytes(b"RIFF")

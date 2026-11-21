@@ -50,6 +50,7 @@ def test_play_and_stop_use_sdk_play_sound_not_stop_playing(monkeypatch: pytest.M
     result = soft_music.play_soft_music(robot, track="gentle_sway", volume=20)
     assert result["status"] == "playing"
     assert result["track"] == "gentle_sway"
+    robot.disable_wobbling.assert_called()
     robot.media.play_sound.assert_called()
     robot.media.stop_playing.assert_not_called()
     assert volumes == [20]
@@ -63,7 +64,8 @@ def test_play_and_stop_use_sdk_play_sound_not_stop_playing(monkeypatch: pytest.M
 
 
 def test_clamp_soft_volume_defaults_and_rejects() -> None:
-    """Soft default is quiet; out-of-range values are rejected."""
+    """Default soft-music volume is audible on-robot; out-of-range values are rejected."""
+    assert soft_music.DEFAULT_SOFT_VOLUME == 80
     assert soft_music.clamp_soft_volume(None) == soft_music.DEFAULT_SOFT_VOLUME
     assert soft_music.clamp_soft_volume(10) == 10
     with pytest.raises(ValueError):

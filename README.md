@@ -35,7 +35,7 @@ Conversational app for the Reachy Mini robot combining realtime voice, vision, p
 
 - Low-latency audio conversation through the Hugging Face realtime backend, using the built-in server or a local endpoint.
 - Vision is handled by the realtime backend when the `camera` tool is used.
-- Layered motion system queues primary moves (dances, emotions, goto poses, breathing) while blending speech-reactive wobble (`ReachyMini.enable_wobbling()` for the dialogue session; off during wake-word listen and sleep).
+- Layered motion system queues primary moves (dances, emotions, goto poses, breathing). Idle presence uses gentle antenna sway plus a soft body z-sway (`BreathingMove`); audio-reactive head wobbling (`enable_wobbling()`) stays off so TTS and lullabies do not drive large head motion.
 - Async tools integrate motion, camera capture, and MCP Tool Spaces. The optional web UI (`--ui`) manages conversations, personalities, tools, and settings, and its Talk view can show the live transcript. The backend's per-turn latencies appear there when **Settings → Developer options → Show response latencies** is on; the choice is saved across launches.
 
 ## Architecture
@@ -250,7 +250,7 @@ Every bundled profile enables `head_tracking` by default; users can still disabl
 | `remember` | Save one short, stable fact about the user for future sessions. | Core install only. Stored in the app instance data directory. |
 | `forget` | Remove a saved memory fact by matching a short query. | Core install only. |
 | `volume_control` | Read or change Reachy's speaker or microphone volume. | Core install only. Uses the daemon REST API; setting the speaker volume plays a short confirmation sound. |
-| `play_soft_music` | Play soft local lullaby-style music on the robot speaker (offline files via SDK `media.play_sound`). Default volume is quiet (25/100). | Core install only. See [Soft music / lullabies](#soft-music--lullabies). |
+| `play_soft_music` | Play soft local lullaby-style music on the robot speaker (offline files via SDK `media.play_sound`). Default volume is 80/100. | Core install only. See [Soft music / lullabies](#soft-music--lullabies). |
 | `stop_soft_music` | Stop soft music and restore the previous speaker volume when possible. | Core install only. |
 | `robot_status` | Read one status topic: `name`, `software` (version, update available), `wifi` (IP address, network), `account` (Hugging Face sign-in), `imu` (which way the head is tilted, motion, temperature), `apps` (installed apps). | Core install only. Uses the daemon REST API. The update check and the Wi-Fi network details are wireless-version only; the IP address is reported on any robot. |
 | `pollen_robotics_reachy_mini_search_tool__search_web` | Search the web and return a short list of results. | Preinstalled MCP Space: `pollen-robotics/reachy-mini-search-tool`. |
@@ -276,7 +276,7 @@ Offline local files only (no Spotify/YouTube). Playback uses the Reachy Mini SDK
 
 Bundled samples are **original synthetic audio (CC0)** — short soft tones for demos. Do **not** commit copyrighted music into the repo; keep personal lullabies in `SOFT_MUSIC_DIR` or the instance folder.
 
-Default play volume is **25/100** (soft). `stop_soft_music` restores the previous speaker level when it can. Sleep also stops soft music. Stopping uses a dedicated sound stop (not `media.stop_playing()`), so conversation TTS keeps working.
+Default play volume is **80/100** (audible on the robot speaker; 25 was too quiet). Soft music also disables audio-reactive head wobbling so playback stays calm. `stop_soft_music` restores the previous speaker level when it can. Sleep also stops soft music. Stopping uses a dedicated sound stop (not `media.stop_playing()`), so conversation TTS keeps working.
 
 ## Creating and adding tools
 

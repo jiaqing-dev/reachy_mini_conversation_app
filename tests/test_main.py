@@ -7,22 +7,19 @@ from unittest.mock import MagicMock
 import reachy_mini_conversation_app.main as main_mod
 
 
-def test_set_head_wobbling_toggles_sdk_and_logs_failures() -> None:
-    """Dialogue enables SDK wobbling; failures are visible warnings, not silent."""
+def test_ensure_calm_motion_disables_wobbling_and_logs_failures() -> None:
+    """Keep enable_wobbling off; failures are visible warnings, not silent."""
     robot = MagicMock()
     logger = MagicMock()
 
-    main_mod._set_head_wobbling(robot, enabled=True, logger=logger)
-    robot.enable_wobbling.assert_called_once_with()
+    main_mod._ensure_calm_motion(robot, logger)
+    robot.disable_wobbling.assert_called_once_with()
+    robot.enable_wobbling.assert_not_called()
     logger.info.assert_called_once()
 
-    robot.enable_wobbling.side_effect = RuntimeError("no daemon wobbler")
-    main_mod._set_head_wobbling(robot, enabled=True, logger=logger)
+    robot.disable_wobbling.side_effect = RuntimeError("no daemon wobbler")
+    main_mod._ensure_calm_motion(robot, logger)
     logger.warning.assert_called_once()
-
-    robot.disable_wobbling.side_effect = None
-    main_mod._set_head_wobbling(robot, enabled=False, logger=logger)
-    robot.disable_wobbling.assert_called_once_with()
 
 
 def test_inactivity_timeout_thread_goes_to_sleep() -> None:

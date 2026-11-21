@@ -60,22 +60,19 @@ def start_import_warmup() -> threading.Thread:
     return _import_warmup_thread
 
 
-def _set_head_wobbling(robot: ReachyMini, *, enabled: bool, logger: logging.Logger) -> None:
-    """Toggle SDK/daemon audio-reactive head wobbling for speaking-time motion.
+def _ensure_calm_motion(robot: ReachyMini, logger: logging.Logger) -> None:
+    """Keep SDK audio-reactive head wobbling off.
 
-    While enabled, audio pushed through ``media.push_audio_sample()`` (assistant
-    TTS) drives subtle head offsets. Keep it on for the dialogue session and off
-    during wake-word listen / sleep so offsets do not fight the sleep pose.
+    ``enable_wobbling()`` drives large head offsets from TTS and ``play_sound``
+    (including lullabies). Presence instead comes from MovementManager idle
+    breathing: gentle antenna sway plus a soft body z-sway. Call this at
+    dialogue start, wake listen, sleep, and shutdown.
     """
-    action = "enable" if enabled else "disable"
     try:
-        if enabled:
-            robot.enable_wobbling()
-        else:
-            robot.disable_wobbling()
-        logger.info("Head wobbling %sd.", action)
+        robot.disable_wobbling()
+        logger.info("Audio-reactive head wobbling disabled (calm antenna/body sway only).")
     except Exception as e:
-        logger.warning("Failed to %s head wobbling: %s", action, e)
+        logger.warning("Failed to disable head wobbling: %s", e)
 
 
 def _start_inactivity_timeout_thread(
@@ -310,7 +307,7 @@ def run(
             stream_manager.emit_phase("ended", "sleep")
             sleep_error: str | None = None
 
-            _set_head_wobbling(robot, enabled=False, logger=logger)
+            _ensure_calm_motion(robot, logger)
             try:
                 from reachy_mini_conversation_app.audio.soft_music import stop_soft_music
 
@@ -434,8 +431,8 @@ def run(
                 assert wake_detector is not None
                 await_wake_after_sleep.clear()
                 go_to_sleep_requested.clear()
-                # Wake listen is mic-only; keep wobbling off until dialogue starts.
-                _set_head_wobbling(robot, enabled=False, logger=logger)
+                # Wake listen is mic-only; keep large head wobble off.
+                _ensure_calm_motion(robot, logger)
                 detected = listen_for_wake_word(
                     robot,
                     detector=wake_detector,
@@ -447,9 +444,9 @@ def run(
                 # Fresh realtime session for each wake → dialogue handoff.
                 stream_manager._install_handler(build_handler(startup_settings.voice))
 
-            # Speaking-time motion: daemon/SDK wobbler reacts to assistant audio
-            # pushed via push_audio_sample (idle when silent).
-            _set_head_wobbling(robot, enabled=True, logger=logger)
+            # No enable_wobbling(): that path thrashs the head on TTS/music.
+            # Idle BreathingMove already provides gentle antenna + soft body sway.
+            _ensure_calm_motion(robot, logger)
             # start() is idempotent while the worker is alive; stop() clears it after sleep.
             movement_manager.start()
 
@@ -489,7 +486,7 @@ def run(
         # already in the sleep pose; on a plain stop it stays awake and
         # the daemon returns it to neutral once the process exits.
         movement_manager.stop(reset_to_neutral=False)
-        _set_head_wobbling(robot, enabled=False, logger=logger)
+        _ensure_calm_motion(robot, logger)
 
         # Ensure media is explicitly closed before disconnecting
         try:

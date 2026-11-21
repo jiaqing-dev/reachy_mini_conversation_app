@@ -22,7 +22,7 @@ from reachy_mini_conversation_app.daemon_api import DaemonApiError, daemon_reque
 logger = logging.getLogger(__name__)
 
 SOFT_MUSIC_DIR_ENV = "SOFT_MUSIC_DIR"
-DEFAULT_SOFT_VOLUME = 25
+DEFAULT_SOFT_VOLUME = 80
 _AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 _SILENCE_NAME = "_silence_stop.wav"
 _STATE_LOCK = threading.Lock()
@@ -175,6 +175,12 @@ def play_soft_music(
         except DaemonApiError as e:
             logger.warning("Could not set soft-music volume (continuing at current level): %s", e)
             previous_volume = None
+
+    # Lullabies must stay calm: audio-reactive head wobbling thrashs on play_sound.
+    try:
+        robot.disable_wobbling()
+    except Exception as e:
+        logger.debug("Could not disable wobbling before soft music: %s", e)
 
     try:
         robot.media.play_sound(str(path.resolve()))

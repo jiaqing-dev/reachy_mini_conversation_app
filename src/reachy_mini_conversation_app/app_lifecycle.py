@@ -27,32 +27,44 @@ _STOP_CURRENT_APP_TIMEOUT_S = 2.0
 _SLEEP_HEAD_TRANSLATION_TOLERANCE_M = 0.05
 _SLEEP_HEAD_ROTATION_TOLERANCE_RAD = 0.35
 _SOFT_MUSIC_TOOLS = ("play_soft_music", "stop_soft_music")
+_GESTURE_INTENT_TOOLS = ("react_to_gesture_intent",)
 
 
-def ensure_soft_music_tools_enabled(instance_path: str | Path | None, logger: logging.Logger) -> list[str]:
-    """Merge soft-music tools into a stale instance tool override when authored defaults include them.
-
-    Saved ``profile_toolsets.json`` lists freeze the old enabled set, so new default tools
-    like ``play_soft_music`` would stay off until the user re-toggles Tool access. Same
-    additive pattern as installing a Tool Space.
-    """
+def _ensure_authored_tools_enabled(
+    instance_path: str | Path | None,
+    logger: logging.Logger,
+    tool_names: tuple[str, ...],
+    *,
+    label: str,
+) -> list[str]:
+    """Merge newly authored default tools into a stale instance Tool-access override."""
     profile = config.REACHY_MINI_CUSTOM_PROFILE or DEFAULT_PROFILE_NAME
     try:
         authored = set(read_profile_default_tool_names(profile))
     except Exception as exc:
-        logger.debug("Could not read authored tools for soft-music seed (%s)", exc)
+        logger.debug("Could not read authored tools for %s seed (%s)", label, exc)
         authored = set()
-    seed = [name for name in _SOFT_MUSIC_TOOLS if name in authored]
+    seed = [name for name in tool_names if name in authored]
     if not seed:
         return []
     try:
         added = enable_profile_tools(profile, seed, instance_path)
     except Exception as exc:
-        logger.warning("Failed to ensure soft-music tools for profile %r: %s", profile, exc)
+        logger.warning("Failed to ensure %s tools for profile %r: %s", label, profile, exc)
         return []
     if added:
-        logger.info("Enabled soft-music tools for profile %r: %s", profile, ", ".join(added))
+        logger.info("Enabled %s tools for profile %r: %s", label, profile, ", ".join(added))
     return added
+
+
+def ensure_soft_music_tools_enabled(instance_path: str | Path | None, logger: logging.Logger) -> list[str]:
+    """Merge soft-music tools into a stale instance tool override when authored defaults include them."""
+    return _ensure_authored_tools_enabled(instance_path, logger, _SOFT_MUSIC_TOOLS, label="soft-music")
+
+
+def ensure_gesture_intent_tools_enabled(instance_path: str | Path | None, logger: logging.Logger) -> list[str]:
+    """Merge react_to_gesture_intent into a stale Tool-access override when authored defaults include it."""
+    return _ensure_authored_tools_enabled(instance_path, logger, _GESTURE_INTENT_TOOLS, label="gesture-intent")
 
 
 def initialize_tools_with_default_fallback(
@@ -76,6 +88,7 @@ def initialize_tools_with_default_fallback(
         logger.warning("Bundled Tool Space migration failed: %s", exc)
 
     ensure_soft_music_tools_enabled(instance_path, logger)
+    ensure_gesture_intent_tools_enabled(instance_path, logger)
 
     try:
         initialize_tools(instance_path=instance_path)
@@ -105,6 +118,7 @@ def initialize_tools_with_default_fallback(
             DEFAULT_PROFILE_NAME,
         )
         ensure_soft_music_tools_enabled(instance_path, logger)
+        ensure_gesture_intent_tools_enabled(instance_path, logger)
         initialize_tools(instance_path=instance_path, force=True)
         return selected_profile
 

@@ -14,6 +14,10 @@ from reachy_mini_conversation_app.config import config, set_custom_profile
 from reachy_mini_conversation_app.daemon_api import DaemonApiError, daemon_request
 from reachy_mini_conversation_app.tool_spaces import migrate_bundled_tool_spaces
 from reachy_mini_conversation_app.profile_store import DEFAULT_PROFILE_NAME, migrate_legacy_profiles
+from reachy_mini_conversation_app.profile_toolsets import (
+    enable_profile_tools,
+    read_profile_default_tool_names,
+)
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, initialize_tools
 from reachy_mini_conversation_app.tools.go_to_sleep import GoToSleep
 
@@ -22,6 +26,33 @@ _STOP_CURRENT_APP_PATH = "/api/apps/stop-current-app"
 _STOP_CURRENT_APP_TIMEOUT_S = 2.0
 _SLEEP_HEAD_TRANSLATION_TOLERANCE_M = 0.05
 _SLEEP_HEAD_ROTATION_TOLERANCE_RAD = 0.35
+_SOFT_MUSIC_TOOLS = ("play_soft_music", "stop_soft_music")
+
+
+def ensure_soft_music_tools_enabled(instance_path: str | Path | None, logger: logging.Logger) -> list[str]:
+    """Merge soft-music tools into a stale instance tool override when authored defaults include them.
+
+    Saved ``profile_toolsets.json`` lists freeze the old enabled set, so new default tools
+    like ``play_soft_music`` would stay off until the user re-toggles Tool access. Same
+    additive pattern as installing a Tool Space.
+    """
+    profile = config.REACHY_MINI_CUSTOM_PROFILE or DEFAULT_PROFILE_NAME
+    try:
+        authored = set(read_profile_default_tool_names(profile))
+    except Exception as exc:
+        logger.debug("Could not read authored tools for soft-music seed (%s)", exc)
+        authored = set()
+    seed = [name for name in _SOFT_MUSIC_TOOLS if name in authored]
+    if not seed:
+        return []
+    try:
+        added = enable_profile_tools(profile, seed, instance_path)
+    except Exception as exc:
+        logger.warning("Failed to ensure soft-music tools for profile %r: %s", profile, exc)
+        return []
+    if added:
+        logger.info("Enabled soft-music tools for profile %r: %s", profile, ", ".join(added))
+    return added
 
 
 def initialize_tools_with_default_fallback(
@@ -43,6 +74,8 @@ def initialize_tools_with_default_fallback(
         migrate_bundled_tool_spaces(instance_path)
     except Exception as exc:
         logger.warning("Bundled Tool Space migration failed: %s", exc)
+
+    ensure_soft_music_tools_enabled(instance_path, logger)
 
     try:
         initialize_tools(instance_path=instance_path)
@@ -71,6 +104,7 @@ def initialize_tools_with_default_fallback(
             exc,
             DEFAULT_PROFILE_NAME,
         )
+        ensure_soft_music_tools_enabled(instance_path, logger)
         initialize_tools(instance_path=instance_path, force=True)
         return selected_profile
 

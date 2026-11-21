@@ -17,10 +17,12 @@ class PlaySoftMusic(Tool):
 
     name = "play_soft_music"
     description = (
-        "Play soft, soothing local music (lullaby-style) on Reachy's speaker for calming a baby or quiet moments. "
-        "Uses offline files only (no streaming). Omit 'track' to play the first available track; "
-        f"default volume is soft ({soft_music.DEFAULT_SOFT_VOLUME}/100). "
-        "Call stop_soft_music to stop. Prefer this over loud dances when the user asks for gentle music."
+        "Play soft soothing local music / lullaby on Reachy's speaker (offline files only). "
+        "Use whenever the user wants gentle, calm, baby, or lullaby music—including Chinese requests like "
+        "「轻柔的音乐」「给宝宝放音乐」「摇篮曲」. "
+        f"Omit 'track' for the first catalog entry; default volume is {soft_music.DEFAULT_SOFT_VOLUME}/100. "
+        "Call stop_soft_music to stop. Prefer this over dances for quiet/baby moments. "
+        "Do not claim you cannot play music—this tool is how you play it."
     )
     needs_response = True
     parameters_schema = {
@@ -37,7 +39,7 @@ class PlaySoftMusic(Tool):
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 100,
-                "description": f"Speaker level while playing. Defaults to {soft_music.DEFAULT_SOFT_VOLUME} (soft).",
+                "description": f"Speaker level while playing. Defaults to {soft_music.DEFAULT_SOFT_VOLUME}.",
             },
         },
         "required": [],

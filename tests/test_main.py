@@ -7,6 +7,24 @@ from unittest.mock import MagicMock
 import reachy_mini_conversation_app.main as main_mod
 
 
+def test_set_head_wobbling_toggles_sdk_and_logs_failures() -> None:
+    """Dialogue enables SDK wobbling; failures are visible warnings, not silent."""
+    robot = MagicMock()
+    logger = MagicMock()
+
+    main_mod._set_head_wobbling(robot, enabled=True, logger=logger)
+    robot.enable_wobbling.assert_called_once_with()
+    logger.info.assert_called_once()
+
+    robot.enable_wobbling.side_effect = RuntimeError("no daemon wobbler")
+    main_mod._set_head_wobbling(robot, enabled=True, logger=logger)
+    logger.warning.assert_called_once()
+
+    robot.disable_wobbling.side_effect = None
+    main_mod._set_head_wobbling(robot, enabled=False, logger=logger)
+    robot.disable_wobbling.assert_called_once_with()
+
+
 def test_inactivity_timeout_thread_goes_to_sleep() -> None:
     """The watchdog should use the shared sleep shutdown path once activity is too old."""
     stream_manager = SimpleNamespace(seconds_since_activity=lambda: 10.0, close=MagicMock())

@@ -250,6 +250,8 @@ Every bundled profile enables `head_tracking` by default; users can still disabl
 | `remember` | Save one short, stable fact about the user for future sessions. | Core install only. Stored in the app instance data directory. |
 | `forget` | Remove a saved memory fact by matching a short query. | Core install only. |
 | `volume_control` | Read or change Reachy's speaker or microphone volume. | Core install only. Uses the daemon REST API; setting the speaker volume plays a short confirmation sound. |
+| `play_soft_music` | Play soft local lullaby-style music on the robot speaker (offline files via SDK `media.play_sound`). Default volume is quiet (25/100). | Core install only. See [Soft music / lullabies](#soft-music--lullabies). |
+| `stop_soft_music` | Stop soft music and restore the previous speaker volume when possible. | Core install only. |
 | `robot_status` | Read one status topic: `name`, `software` (version, update available), `wifi` (IP address, network), `account` (Hugging Face sign-in), `imu` (which way the head is tilted, motion, temperature), `apps` (installed apps). | Core install only. Uses the daemon REST API. The update check and the Wi-Fi network details are wireless-version only; the IP address is reported on any robot. |
 | `pollen_robotics_reachy_mini_search_tool__search_web` | Search the web and return a short list of results. | Preinstalled MCP Space: `pollen-robotics/reachy-mini-search-tool`. |
 | `pollen_robotics_reachy_mini_weather_tool__get_weather` | Report today's weather for a place: current conditions, high and low temperature, and rain chance. | Preinstalled MCP Space: `pollen-robotics/reachy-mini-weather-tool`. |
@@ -259,6 +261,22 @@ Every bundled profile enables `head_tracking` by default; users can still disabl
 
 > [!NOTE]
 > `remember`/`forget` facts are stored in `memory.v1.json` inside the app's instance data directory (`~/.local/share/reachy_mini_conversation_app/` by default, or the instance path used by the desktop launcher). `forget` only removes facts matched by query. To reset all remembered facts, delete this file.
+
+### Soft music / lullabies
+
+Offline local files only (no Spotify/YouTube). Playback uses the Reachy Mini SDK `media.play_sound` path on the robot speaker.
+
+**Ask Reachy** to play soft music for a baby (default profile enables `play_soft_music` / `stop_soft_music`), or call the tools directly from Tool access.
+
+**Add your own tracks** (`.wav`, `.mp3`, `.ogg`, `.flac`, `.m4a`):
+
+1. Preferred: put files in the instance folder `sounds/lullabies/` (next to memory/settings), **or**
+2. Set `SOFT_MUSIC_DIR=/path/to/folder` in the environment / `.env`, **or**
+3. Use the bundled samples under `src/reachy_mini_conversation_app/sounds/lullabies/` (`gentle_sway`, `soft_chimes`).
+
+Bundled samples are **original synthetic audio (CC0)** — short soft tones for demos. Do **not** commit copyrighted music into the repo; keep personal lullabies in `SOFT_MUSIC_DIR` or the instance folder.
+
+Default play volume is **25/100** (soft). `stop_soft_music` restores the previous speaker level when it can. Sleep also stops soft music. Stopping uses a dedicated sound stop (not `media.stop_playing()`), so conversation TTS keeps working.
 
 ## Creating and adding tools
 

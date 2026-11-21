@@ -311,6 +311,12 @@ def run(
             sleep_error: str | None = None
 
             _set_head_wobbling(robot, enabled=False, logger=logger)
+            try:
+                from reachy_mini_conversation_app.audio.soft_music import stop_soft_music
+
+                stop_soft_music(robot)
+            except Exception as e:
+                logger.debug("Error stopping soft music before sleep: %s", e)
 
             movement_manager.stop(reset_to_neutral=False)
 

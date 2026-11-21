@@ -14,6 +14,8 @@ default_tools = [
   "forget",
   "head_tracking",
   "volume_control",
+  "play_soft_music",
+  "stop_soft_music",
   "robot_status",
   "pollen_robotics_reachy_mini_search_tool__search_web",
   "pollen_robotics_reachy_mini_weather_tool__get_weather",

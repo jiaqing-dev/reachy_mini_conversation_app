@@ -20,10 +20,15 @@ def test_initialize_tools_migrates_bundled_spaces_before_loading(monkeypatch) ->
     monkeypatch.setattr(
         app_lifecycle, "ensure_soft_music_tools_enabled", lambda _path, _logger: calls.append("soft_music")
     )
+    monkeypatch.setattr(
+        app_lifecycle,
+        "ensure_gesture_intent_tools_enabled",
+        lambda _path, _logger: calls.append("gesture_intent"),
+    )
     monkeypatch.setattr(app_lifecycle, "initialize_tools", lambda **_kwargs: calls.append("tools"))
 
     assert app_lifecycle.initialize_tools_with_default_fallback(None, MagicMock()) is None
-    assert calls == ["profiles", "spaces", "soft_music", "tools"]
+    assert calls == ["profiles", "spaces", "soft_music", "gesture_intent", "tools"]
 
 
 def test_ensure_soft_music_tools_enabled_merges_stale_override(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,6 +57,33 @@ def test_default_profile_instructs_soft_music_tool_use() -> None:
     assert "stop_soft_music" in profile.default_tools
     assert "play_soft_music" in profile.instructions
     assert "轻柔的音乐" in profile.instructions or "给宝宝放音乐" in profile.instructions
+
+
+def test_ensure_gesture_intent_tools_enabled_merges_stale_override(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A frozen Tool-access override without gesture intent should gain the new tool."""
+    from reachy_mini_conversation_app.profile_toolsets import (
+        read_profile_tool_override,
+        write_profile_tool_override,
+    )
+
+    monkeypatch.setattr(app_lifecycle.config, "REACHY_MINI_CUSTOM_PROFILE", None)
+    write_profile_tool_override("default", ["dance", "play_emotion"], tmp_path)
+    added = app_lifecycle.ensure_gesture_intent_tools_enabled(tmp_path, MagicMock())
+    assert added == ["react_to_gesture_intent"]
+    override = read_profile_tool_override("default", tmp_path)
+    assert override is not None
+    assert "react_to_gesture_intent" in override
+
+
+def test_default_profile_instructs_gesture_intent_tool_use() -> None:
+    """The packaged default prompt must map Chinese gesture phrases to react_to_gesture_intent."""
+    from reachy_mini_conversation_app.profile_store import read_packaged_default_profile
+
+    profile = read_packaged_default_profile()
+    assert "react_to_gesture_intent" in profile.default_tools
+    assert "react_to_gesture_intent" in profile.instructions
+    assert "enthusiastic1" in profile.instructions
+    assert "竖拇指" in profile.instructions or "点赞" in profile.instructions
 
 
 def test_request_stop_current_app_posts_to_daemon(monkeypatch) -> None:

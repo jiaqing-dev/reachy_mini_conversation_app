@@ -239,8 +239,9 @@ Every bundled profile enables `head_tracking` by default; users can still disabl
 |------|--------|--------------|
 | `dance` | Queue a dance from `reachy_mini_dances_library`. | Core install only. |
 | `stop_dance` | Clear queued dances. | Core install only. |
-| `play_emotion` | Play a recorded emotion clip via Hugging Face datasets. | Core install only. Uses the default open emotions dataset: [`pollen-robotics/reachy-mini-emotions-library`](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library). |
+| `play_emotion` | Play a recorded emotion clip via Hugging Face datasets. Includes spoken Greetings stand-ins (`open_palm`, `thumb_up`, `thumb_down`, `pointing_up`). | Core install only. Uses the default open emotions dataset: [`pollen-robotics/reachy-mini-emotions-library`](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library). |
 | `stop_emotion` | Clear queued emotions. | Core install only. |
+| `react_to_gesture_intent` | Queue the same emotion IDs the official Greetings app uses for open palm / thumbs up / thumbs down / pointing up — from **voice**, not the camera. | Core install only. See [Spoken Greetings gestures](#spoken-greetings-gestures). |
 | `camera` | Capture the latest camera frame and analyze it with the selected realtime backend. | Core install only. Requires the camera (disable with `--no-camera`). |
 | `idle_do_nothing` | Explicitly remain idle during an idle turn. Not intended for normal conversation turns. | Core install only. |
 | `move_head` | Queue a head pose change (left/right/up/down/front). | Core install only. |
@@ -261,6 +262,19 @@ Every bundled profile enables `head_tracking` by default; users can still disabl
 
 > [!NOTE]
 > `remember`/`forget` facts are stored in `memory.v1.json` inside the app's instance data directory (`~/.local/share/reachy_mini_conversation_app/` by default, or the instance path used by the desktop launcher). `forget` only removes facts matched by query. To reset all remembered facts, delete this file.
+
+### Spoken Greetings gestures
+
+This conversation app does **not** embed [Reachy Mini Greetings](https://huggingface.co/spaces/pollen-robotics/reachy_mini_greetings) or MediaPipe. Voice/LLM tools drive the same four emotion clips Greetings uses for hand gestures:
+
+| Spoken intent (examples) | Tool | Emotion ID |
+|--------------------------|------|------------|
+| 打招呼 / 张开手 | `react_to_gesture_intent(kind=open_palm)` | `enthusiastic1` |
+| 竖拇指 / 点赞 | `react_to_gesture_intent(kind=thumb_up)` | `proud1` |
+| 拇指向下 / 不开心 | `react_to_gesture_intent(kind=thumb_down)` | `sad2` |
+| 向上指 / 注意听 | `react_to_gesture_intent(kind=pointing_up)` | `attentive2` |
+
+For **camera** gesture recognition, install and run the separate Greetings app (Lite). On startup this app also merges `react_to_gesture_intent` into stale Tool-access overrides when the default profile authors it.
 
 ### Soft music / lullabies
 

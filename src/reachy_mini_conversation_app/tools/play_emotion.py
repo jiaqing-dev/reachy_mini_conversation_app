@@ -66,6 +66,11 @@ EMOTION_INTENTS: tuple[str, ...] = (
     "dance",
     "electric",
     "dying",
+    # Spoken stand-ins for the official Greetings app gesture→emotion map.
+    "open_palm",
+    "thumb_up",
+    "thumb_down",
+    "pointing_up",
 )
 
 _EXCELLENT_MOVES: tuple[str, ...] = (
@@ -75,10 +80,12 @@ _EXCELLENT_MOVES: tuple[str, ...] = (
     "dance3",
     "downcast1",
     "dying1",
+    "enthusiastic1",
     "exhausted1",
     "grateful1",
     "helpful1",
     "loving1",
+    "proud1",
     "rage1",
     "reprimand1",
     "resigned1",
@@ -165,6 +172,10 @@ _INTENT_TO_MOVES: dict[str, tuple[str, ...]] = {
     "dance": ("dance2", "dance3"),
     "electric": ("electric1",),
     "dying": ("dying1",),
+    "open_palm": ("enthusiastic1",),
+    "thumb_up": ("proud1",),
+    "thumb_down": ("sad2",),
+    "pointing_up": ("attentive2",),
 }
 
 _ALLOWED_MOVE_NAMES: frozenset[str] = frozenset(_CURATED_DEFAULT_MOVES).union(*_INTENT_TO_MOVES.values())
@@ -235,7 +246,12 @@ class PlayEmotion(Tool):
     """Play a pre-recorded emotion."""
 
     name = "play_emotion"
-    description = "Play a robot emotion matching a requested emotional intent."
+    description = (
+        "Play a robot emotion matching a requested emotional intent. "
+        "For spoken Greetings-style gesture requests (张开手/打招呼, 竖拇指/点赞, 拇指向下/不开心, "
+        "向上指/注意听), prefer react_to_gesture_intent, or use emotion open_palm→enthusiastic1, "
+        "thumb_up→proud1, thumb_down→sad2, pointing_up→attentive2."
+    )
     needs_response = False
     parameters_schema = {
         "type": "object",
@@ -246,7 +262,8 @@ class PlayEmotion(Tool):
                 "description": (
                     "Compact emotional intent to express. Choose one of the enum values. Use nuanced "
                     "labels like no_sad, no_excited, no_firm, or yes_understanding when plain yes/no "
-                    "loses meaning. Use random if no clear intent fits."
+                    "loses meaning. For Greetings gesture stand-ins use open_palm, thumb_up, "
+                    "thumb_down, or pointing_up. Use random if no clear intent fits."
                 ),
             },
         },

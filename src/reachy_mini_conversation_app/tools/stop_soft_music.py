@@ -16,7 +16,8 @@ class StopSoftMusic(Tool):
 
     name = "stop_soft_music"
     description = (
-        "Stop soft/lullaby music started with play_soft_music and restore the previous speaker volume when possible."
+        "Stop soft/lullaby music started with play_soft_music (including when the user says stop the music / "
+        "「停下音乐」「关闭音乐」) and restore the previous speaker volume when possible."
     )
     needs_response = False
     parameters_schema = {

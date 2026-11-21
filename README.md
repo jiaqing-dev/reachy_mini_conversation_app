@@ -266,7 +266,7 @@ Every bundled profile enables `head_tracking` by default; users can still disabl
 
 Offline local files only (no Spotify/YouTube). Playback uses the Reachy Mini SDK `media.play_sound` path on the robot speaker.
 
-**Ask Reachy** to play soft music for a baby (default profile enables `play_soft_music` / `stop_soft_music`), or call the tools directly from Tool access.
+**Ask Reachy** to play soft music for a baby (e.g. 「给宝宝放点轻柔的音乐」). The default profile enables `play_soft_music` / `stop_soft_music` and instructs the model to call them; on startup the app also merges those tools into any stale saved Tool-access override. You can still toggle them under Tools → Tool access.
 
 **Add your own tracks** (`.wav`, `.mp3`, `.ogg`, `.flac`, `.m4a`):
 

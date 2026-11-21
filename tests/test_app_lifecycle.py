@@ -17,10 +17,41 @@ def test_initialize_tools_migrates_bundled_spaces_before_loading(monkeypatch) ->
     calls: list[str] = []
     monkeypatch.setattr(app_lifecycle, "migrate_legacy_profiles", lambda _path: calls.append("profiles"))
     monkeypatch.setattr(app_lifecycle, "migrate_bundled_tool_spaces", lambda _path: calls.append("spaces"))
+    monkeypatch.setattr(
+        app_lifecycle, "ensure_soft_music_tools_enabled", lambda _path, _logger: calls.append("soft_music")
+    )
     monkeypatch.setattr(app_lifecycle, "initialize_tools", lambda **_kwargs: calls.append("tools"))
 
     assert app_lifecycle.initialize_tools_with_default_fallback(None, MagicMock()) is None
-    assert calls == ["profiles", "spaces", "tools"]
+    assert calls == ["profiles", "spaces", "soft_music", "tools"]
+
+
+def test_ensure_soft_music_tools_enabled_merges_stale_override(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A frozen Tool-access override without soft music should gain the new tools."""
+    from reachy_mini_conversation_app.profile_toolsets import (
+        read_profile_tool_override,
+        write_profile_tool_override,
+    )
+
+    monkeypatch.setattr(app_lifecycle.config, "REACHY_MINI_CUSTOM_PROFILE", None)
+    write_profile_tool_override("default", ["dance", "volume_control"], tmp_path)
+    added = app_lifecycle.ensure_soft_music_tools_enabled(tmp_path, MagicMock())
+    assert added == ["play_soft_music", "stop_soft_music"]
+    override = read_profile_tool_override("default", tmp_path)
+    assert override is not None
+    assert "play_soft_music" in override
+    assert "stop_soft_music" in override
+
+
+def test_default_profile_instructs_soft_music_tool_use() -> None:
+    """The packaged default prompt must tell the model to call play_soft_music."""
+    from reachy_mini_conversation_app.profile_store import read_packaged_default_profile
+
+    profile = read_packaged_default_profile()
+    assert "play_soft_music" in profile.default_tools
+    assert "stop_soft_music" in profile.default_tools
+    assert "play_soft_music" in profile.instructions
+    assert "轻柔的音乐" in profile.instructions or "给宝宝放音乐" in profile.instructions
 
 
 def test_request_stop_current_app_posts_to_daemon(monkeypatch) -> None:

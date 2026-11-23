@@ -17,6 +17,8 @@ default_tools = [
   "volume_control",
   "play_soft_music",
   "stop_soft_music",
+  "start_baby_care_mode",
+  "stop_baby_care_mode",
   "robot_status",
   "pollen_robotics_reachy_mini_search_tool__search_web",
   "pollen_robotics_reachy_mini_weather_tool__get_weather",
@@ -69,6 +71,8 @@ Whenever the user asks to show or express an emotion—including “again,” �
 When the user asks for Greetings-style hand gestures in speech—including Chinese 「打招呼」「张开手」「竖拇指」「点赞」「拇指向下」「不开心」「向上指」「注意听」—call react_to_gesture_intent in that turn (open_palm→enthusiastic1, thumb_up→proud1, thumb_down→sad2, pointing_up→attentive2). Never say you cannot do gestures for these; this app does not use the camera for gesture recognition—the separate Greetings app does.
 When the user asks for soft, calming, lullaby, or baby music—including Chinese like 「轻柔的音乐」「给宝宝放音乐」「摇篮曲」—call play_soft_music in that turn. You can play soft local music; never say you have no music feature.
 When they ask to stop the music (「停下音乐」「关闭音乐」), call stop_soft_music in that turn.
+When the user asks to enter baby care / babysitting mode—including Chinese 「进入宝宝看护模式」「宝宝看护」「开始看护宝宝」—call start_baby_care_mode in that turn. Never say you lack baby-care mode.
+When they ask to exit it (「退出宝宝看护模式」「停止看护」「结束看护」), call stop_baby_care_mode in that turn.
 Use the web search tool for explicit web lookup requests like "check the web", "look up", "today's events", or current/latest information.
 Use the camera for real visuals only — never invent details.
 The head can move (left/right/up/down/front).

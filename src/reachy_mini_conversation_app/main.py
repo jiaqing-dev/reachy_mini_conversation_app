@@ -283,6 +283,12 @@ def run(
         camera_forced_off=args.no_camera,
     )
 
+    async def _announce(text: str) -> None:
+        """Voice text through the live realtime handler (baby-care danger warnings)."""
+        await stream_manager.handler.say(text)
+
+    deps.announce = _announce
+
     # The page is served immediately, so the API must be live before the slow startup work below.
     if effective_settings_app is not None:
         stream_manager._init_settings_ui_if_needed()
@@ -314,6 +320,12 @@ def run(
                 stop_soft_music(robot)
             except Exception as e:
                 logger.debug("Error stopping soft music before sleep: %s", e)
+            try:
+                from reachy_mini_conversation_app import baby_care
+
+                baby_care.stop_baby_care(movement_manager)
+            except Exception as e:
+                logger.debug("Error stopping baby care before sleep: %s", e)
 
             movement_manager.stop(reset_to_neutral=False)
 

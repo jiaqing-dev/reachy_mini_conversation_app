@@ -25,10 +25,15 @@ def test_initialize_tools_migrates_bundled_spaces_before_loading(monkeypatch) ->
         "ensure_gesture_intent_tools_enabled",
         lambda _path, _logger: calls.append("gesture_intent"),
     )
+    monkeypatch.setattr(
+        app_lifecycle,
+        "ensure_baby_care_tools_enabled",
+        lambda _path, _logger: calls.append("baby_care"),
+    )
     monkeypatch.setattr(app_lifecycle, "initialize_tools", lambda **_kwargs: calls.append("tools"))
 
     assert app_lifecycle.initialize_tools_with_default_fallback(None, MagicMock()) is None
-    assert calls == ["profiles", "spaces", "soft_music", "gesture_intent", "tools"]
+    assert calls == ["profiles", "spaces", "soft_music", "gesture_intent", "baby_care", "tools"]
 
 
 def test_ensure_soft_music_tools_enabled_merges_stale_override(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

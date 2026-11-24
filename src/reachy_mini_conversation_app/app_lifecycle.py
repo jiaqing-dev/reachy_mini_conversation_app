@@ -28,6 +28,7 @@ _SLEEP_HEAD_TRANSLATION_TOLERANCE_M = 0.05
 _SLEEP_HEAD_ROTATION_TOLERANCE_RAD = 0.35
 _SOFT_MUSIC_TOOLS = ("play_soft_music", "stop_soft_music")
 _GESTURE_INTENT_TOOLS = ("react_to_gesture_intent",)
+_BABY_CARE_TOOLS = ("start_baby_care_mode", "stop_baby_care_mode")
 
 
 def _ensure_authored_tools_enabled(
@@ -67,6 +68,11 @@ def ensure_gesture_intent_tools_enabled(instance_path: str | Path | None, logger
     return _ensure_authored_tools_enabled(instance_path, logger, _GESTURE_INTENT_TOOLS, label="gesture-intent")
 
 
+def ensure_baby_care_tools_enabled(instance_path: str | Path | None, logger: logging.Logger) -> list[str]:
+    """Merge baby-care tools into a stale instance tool override when authored defaults include them."""
+    return _ensure_authored_tools_enabled(instance_path, logger, _BABY_CARE_TOOLS, label="baby-care")
+
+
 def initialize_tools_with_default_fallback(
     instance_path: str | Path | None,
     logger: logging.Logger,
@@ -89,6 +95,7 @@ def initialize_tools_with_default_fallback(
 
     ensure_soft_music_tools_enabled(instance_path, logger)
     ensure_gesture_intent_tools_enabled(instance_path, logger)
+    ensure_baby_care_tools_enabled(instance_path, logger)
 
     try:
         initialize_tools(instance_path=instance_path)
@@ -119,6 +126,7 @@ def initialize_tools_with_default_fallback(
         )
         ensure_soft_music_tools_enabled(instance_path, logger)
         ensure_gesture_intent_tools_enabled(instance_path, logger)
+        ensure_baby_care_tools_enabled(instance_path, logger)
         initialize_tools(instance_path=instance_path, force=True)
         return selected_profile
 

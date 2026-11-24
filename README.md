@@ -253,6 +253,8 @@ Every bundled profile enables `head_tracking` by default; users can still disabl
 | `volume_control` | Read or change Reachy's speaker or microphone volume. | Core install only. Uses the daemon REST API; setting the speaker volume plays a short confirmation sound. |
 | `play_soft_music` | Play soft local lullaby-style music on the robot speaker (offline files via SDK `media.play_sound`). Default volume is 80/100. | Core install only. See [Soft music / lullabies](#soft-music--lullabies). |
 | `stop_soft_music` | Stop soft music and restore the previous speaker volume when possible. | Core install only. |
+| `start_baby_care_mode` | Enter baby care mode: head-follow, photo every ~30s, vision hazard check, loud local alert + `alert.jsonl`. | Core install only. See [Baby care mode](#baby-care-mode). |
+| `stop_baby_care_mode` | Stop baby care mode and head following. | Core install only. |
 | `robot_status` | Read one status topic: `name`, `software` (version, update available), `wifi` (IP address, network), `account` (Hugging Face sign-in), `imu` (which way the head is tilted, motion, temperature), `apps` (installed apps). | Core install only. Uses the daemon REST API. The update check and the Wi-Fi network details are wireless-version only; the IP address is reported on any robot. |
 | `pollen_robotics_reachy_mini_search_tool__search_web` | Search the web and return a short list of results. | Preinstalled MCP Space: `pollen-robotics/reachy-mini-search-tool`. |
 | `pollen_robotics_reachy_mini_weather_tool__get_weather` | Report today's weather for a place: current conditions, high and low temperature, and rain chance. | Preinstalled MCP Space: `pollen-robotics/reachy-mini-weather-tool`. |
@@ -292,6 +294,14 @@ Offline local files only (no Spotify/YouTube). Playback uses the Reachy Mini SDK
 Bundled samples are **original synthetic audio (CC0)** — short soft tones for demos. Do **not** commit copyrighted music into the repo; keep personal lullabies on the USB media folder, in `SOFT_MUSIC_DIR`, or in the instance folder.
 
 Default play volume is **80/100** (audible on the robot speaker; 25 was too quiet). Soft music also disables audio-reactive head wobbling so playback stays calm. `stop_soft_music` restores the previous speaker level when it can. Sleep also stops soft music. Stopping uses a dedicated sound stop (not `media.stop_playing()`), so conversation TTS keeps working.
+
+### Baby care mode
+
+Say 「进入宝宝看护模式」 (or ask in English to start baby care / babysitting mode). The default profile enables `start_baby_care_mode` / `stop_baby_care_mode` and instructs the model to call them; startup also merges those tools into stale Tool-access overrides.
+
+While active, Reachy enables head tracking to follow a person, captures a JPEG about every 30 seconds, and sends it to a vision chat model for a structured `{safe, hazards, summary}` check. Photos and `alert.jsonl` go under `/mnt/usb_storage/media/baby-care/` when the USB media root is writable, otherwise under `<instance>/media/baby-care/`. On danger the robot raises speaker volume and voices a loud warning to adults, then appends an alert line with image path and timestamp. Optional `BABY_CARE_WEBHOOK_URL` can POST the same JSON later. Sleep / `stop_baby_care_mode` / 「退出宝宝看护模式」 stop the loop.
+
+Vision defaults to the Hugging Face OpenAI-compatible router (`BABY_CARE_VISION_URL`, `BABY_CARE_VISION_MODEL`, token from `BABY_CARE_VISION_TOKEN` or `HF_TOKEN`). Camera must be enabled.
 
 ## Creating and adding tools
 
